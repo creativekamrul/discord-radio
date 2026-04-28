@@ -281,7 +281,8 @@ export function createAPIRoutes(bot, audioDir) {
   const navidrome = new NavidromeClient(
     process.env.NAVIDROME_URL,
     process.env.NAVIDROME_USER,
-    process.env.NAVIDROME_PASSWORD
+    process.env.NAVIDROME_PASSWORD,
+    process.env.NAVIDROME_INTERNAL_URL
   );
 
   router.get('/navidrome/status', (_req, res) => {

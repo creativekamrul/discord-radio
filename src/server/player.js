@@ -14,9 +14,14 @@ const ffmpegPath = require('ffmpeg-static');
 function createUrlStream(url, seekSeconds) {
   const args = [];
   if (seekSeconds > 0) args.push('-ss', String(seekSeconds));
-  args.push('-i', url, '-analyzeduration', '0', '-loglevel', '0',
+  args.push('-i', url, '-analyzeduration', '0', '-loglevel', 'error',
     '-f', 's16le', '-ar', '48000', '-ac', '2', '-map', 'a', 'pipe:1');
-  return spawn(ffmpegPath, args, { windowsHide: true });
+  const proc = spawn(ffmpegPath, args, { windowsHide: true });
+  let stderr = '';
+  proc.stderr.on('data', (d) => { stderr += d.toString(); });
+  proc.on('error', (err) => { console.error(`[FFmpeg URL] spawn error: ${err.message}`); });
+  proc.on('close', (code) => { if (code && code !== 0) console.error(`[FFmpeg URL] exit code ${code}: ${stderr}`); });
+  return proc;
 }
 
 const durationCache = new Map();

@@ -7,11 +7,13 @@ function generateToken(password) {
 }
 
 export class NavidromeClient {
-  constructor(url, username, password) {
+  constructor(url, username, password, internalUrl) {
     this.baseUrl = url.replace(/\/+$/, '');
+    this.streamBaseUrl = (internalUrl || url).replace(/\/+$/, '');
     this.username = username;
     this.password = password;
     this.available = !!(url && username && password);
+    console.log(`[Navidrome] Initialized — url: ${this.baseUrl}, streamUrl: ${this.streamBaseUrl}, user: ${this.username}, available: ${this.available}`);
   }
 
   async _request(endpoint, params = {}) {
@@ -26,8 +28,12 @@ export class NavidromeClient {
       f: 'json',
       ...params,
     });
-    const res = await fetch(`${this.baseUrl}/rest/${endpoint}?${query}`);
+    const url = `${this.baseUrl}/rest/${endpoint}?${query}`;
+    console.log(`[Navidrome] Requesting: ${url}`);
+    const res = await fetch(url);
+    console.log(`[Navidrome] Response status: ${res.status}`);
     const data = await res.json();
+    console.log(`[Navidrome] Response body:`, JSON.stringify(data));
     const subsonicResponse = data['subsonic-response'];
     if (!subsonicResponse || subsonicResponse.status !== 'ok') {
       throw new Error(subsonicResponse?.error?.message || 'Subsonic API error');
@@ -46,7 +52,7 @@ export class NavidromeClient {
       c: 'radio-discord-bot',
       id: songId,
     });
-    return `${this.baseUrl}/rest/stream?${params}`;
+    return `${this.streamBaseUrl}/rest/stream?${params}`;
   }
 
   getCoverArtUrl(coverArtId) {
@@ -61,7 +67,7 @@ export class NavidromeClient {
       id: coverArtId,
       size: '300',
     });
-    return `${this.baseUrl}/rest/getCoverArt?${params}`;
+    return `${this.streamBaseUrl}/rest/getCoverArt?${params}`;
   }
 
   async ping() {
