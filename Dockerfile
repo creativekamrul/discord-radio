@@ -15,6 +15,7 @@ RUN npm run build
 FROM base AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+RUN apk add --no-cache su-exec
 RUN addgroup --system --gid 1001 appgroup
 RUN adduser --system --uid 1001 appuser
 COPY --from=builder /app/node_modules ./node_modules
@@ -22,9 +23,9 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/server.js ./server.js
 COPY --from=builder /app/src ./src
 COPY --from=builder /app/playlists.json ./playlists.json
-RUN mkdir -p /app/audio && chown appuser:appgroup /app/audio
-USER appuser
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
-CMD ["node", "server.js"]
+ENTRYPOINT ["/app/entrypoint.sh"]
