@@ -1,0 +1,21 @@
+services:
+  radio-discord-bot:
+    container_name: radio-discord-bot
+    image: radio-discord-bot
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DISCORD_TOKEN: "${DISCORD_TOKEN}"
+      DISCORD_CLIENT_ID: "${DISCORD_CLIENT_ID}"
+      PORT: "${PORT:-3000}"
+      AUDIO_DIR: "/app/audio"
+      DASHBOARD_PASSWORD: "${DASHBOARD_PASSWORD}"
+      NAVIDROME_URL: "${NAVIDROME_URL}"
+      NAVIDROME_USER: "${NAVIDROME_USER}"
+      NAVIDROME_PASSWORD: "${NAVIDROME_PASSWORD}"
+    volumes:
+      - ./audio:/app/audio
+    ports:
+      - "${PORT:-3000}:3000"
+    restart: unless-stopped
