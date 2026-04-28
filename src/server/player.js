@@ -11,6 +11,14 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const ffmpegPath = require('ffmpeg-static');
 
+function createUrlStream(url, seekSeconds) {
+  const args = [];
+  if (seekSeconds > 0) args.push('-ss', String(seekSeconds));
+  args.push('-i', url, '-analyzeduration', '0', '-loglevel', '0',
+    '-f', 's16le', '-ar', '48000', '-ac', '2', '-map', 'a', 'pipe:1');
+  return spawn(ffmpegPath, args, { windowsHide: true });
+}
+
 const durationCache = new Map();
 
 export function getAudioDuration(filePath) {
@@ -108,8 +116,15 @@ export class GuildPlayer {
 
   addToQueue(filePath) {
     if (!fs.existsSync(filePath)) return false;
-    this.queue.push(filePath);
-    this.originalQueue.push(filePath);
+    this.queue.push({ type: 'file', path: filePath });
+    this.originalQueue.push({ type: 'file', path: filePath });
+    if (this.shuffled) this._shuffleQueue();
+    return true;
+  }
+
+  addToQueueUrl(url, title, duration) {
+    this.queue.push({ type: 'url', url, title, duration: duration || 0 });
+    this.originalQueue.push({ type: 'url', url, title, duration: duration || 0 });
     if (this.shuffled) this._shuffleQueue();
     return true;
   }
@@ -117,7 +132,9 @@ export class GuildPlayer {
   removeFromQueue(index) {
     if (index < 0 || index >= this.queue.length) return false;
     const removed = this.queue.splice(index, 1)[0];
-    const origIndex = this.originalQueue.indexOf(removed);
+    const origIndex = this.originalQueue.findIndex(
+      (t) => t.type === removed.type && (t.path || t.url) === (removed.path || removed.url)
+    );
     if (origIndex !== -1) this.originalQueue.splice(origIndex, 1);
     if (this.currentIndex >= this.queue.length) {
       this.currentIndex = this.queue.length - 1;
@@ -131,16 +148,21 @@ export class GuildPlayer {
     this.currentIndex = -1;
   }
 
-  play(filePath) {
+  play(item) {
     if (!this.connection) return false;
-    const resolved = filePath || this._getNextTrack();
+    const resolved = item || this._getNextTrack();
     if (!resolved) return false;
-    if (!fs.existsSync(resolved)) return false;
+
+    if (resolved.type === 'url') {
+      return this._playUrl(resolved.url, resolved.title, resolved.duration);
+    }
+
+    if (!fs.existsSync(resolved.path)) return false;
 
     this.audioPlayer.stop();
 
     try {
-      const proc = createSeekableStream(resolved, 0);
+      const proc = createSeekableStream(resolved.path, 0);
       this.ffmpegProcess = proc;
       const resource = createAudioResource(proc.stdout, {
         inputType: StreamType.Raw,
@@ -149,14 +171,14 @@ export class GuildPlayer {
 
       resource.volume.setVolume(this.volume);
       this.currentResource = resource;
-      this.currentTrack = path.basename(resolved);
-      this.currentFilePath = resolved;
+      this.currentTrack = path.basename(resolved.path);
+      this.currentFilePath = resolved.path;
       this.currentIndex = this.queue.indexOf(resolved);
       this.seekOffset = 0;
       this.totalPausedMs = 0;
       this.playbackStartedAt = 0;
 
-      getAudioDuration(resolved).then((d) => { this.currentDuration = d; });
+      getAudioDuration(resolved.path).then((d) => { this.currentDuration = d; });
 
       this.audioPlayer.play(resource);
       this.isPlaying = true;
@@ -168,8 +190,47 @@ export class GuildPlayer {
     }
   }
 
+  _playUrl(url, title, duration) {
+    if (!this.connection) return false;
+
+    this.audioPlayer.stop();
+
+    try {
+      const proc = createUrlStream(url, 0);
+      this.ffmpegProcess = proc;
+      const resource = createAudioResource(proc.stdout, {
+        inputType: StreamType.Raw,
+        inlineVolume: true,
+      });
+
+      resource.volume.setVolume(this.volume);
+      this.currentResource = resource;
+      this.currentTrack = title || url;
+      this.currentFilePath = url;
+      this.currentDuration = duration || 0;
+      this.seekOffset = 0;
+      this.totalPausedMs = 0;
+      this.playbackStartedAt = 0;
+
+      this.audioPlayer.play(resource);
+      this.isPlaying = true;
+      this.isPaused = false;
+      return true;
+    } catch (err) {
+      console.error('[Player] URL stream error:', err.message);
+      return false;
+    }
+  }
+
   playNow(filePath) {
     this.addToQueue(filePath);
+    const idx = this.queue.length - 1;
+    this.currentIndex = idx - 1;
+    return this._playNext();
+  }
+
+  playNowUrl(url, title, duration) {
+    this.addToQueueUrl(url, title, duration);
     const idx = this.queue.length - 1;
     this.currentIndex = idx - 1;
     return this._playNext();
@@ -184,12 +245,16 @@ export class GuildPlayer {
 
   seekTo(seconds) {
     if (!this.currentFilePath || !this.connection) return false;
-    seconds = Math.max(0, Math.min(seconds, this.currentDuration || seconds));
+    if (this.currentDuration) seconds = Math.max(0, Math.min(seconds, this.currentDuration));
 
     this.audioPlayer.stop();
 
     try {
-      const proc = createSeekableStream(this.currentFilePath, seconds);
+      const currentItem = this.currentIndex >= 0 ? this.queue[this.currentIndex] : null;
+      const isUrl = currentItem?.type === 'url';
+      const proc = isUrl
+        ? createUrlStream(this.currentFilePath, seconds)
+        : createSeekableStream(this.currentFilePath, seconds);
       this.ffmpegProcess = proc;
       const resource = createAudioResource(proc.stdout, {
         inputType: StreamType.Raw,
@@ -277,10 +342,11 @@ export class GuildPlayer {
     if (this.shuffled) {
       this._shuffleQueue();
     } else {
-      const currentFile = this.currentIndex >= 0 ? this.queue[this.currentIndex] : null;
+      const current = this.currentIndex >= 0 ? this.queue[this.currentIndex] : null;
       this.queue = [...this.originalQueue];
-      if (currentFile) {
-        this.currentIndex = this.queue.indexOf(currentFile);
+      if (current) {
+        const key = current.path || current.url;
+        this.currentIndex = this.queue.findIndex((t) => (t.path || t.url) === key);
       }
     }
     return this.shuffled;
@@ -309,7 +375,10 @@ export class GuildPlayer {
       currentTime: Math.round(currentTime),
       currentIndex: this.currentIndex,
       queueLength: this.queue.length,
-      queue: this.queue.map((f) => path.basename(f)),
+      queue: this.queue.map((t) => {
+        if (t.type === 'url') return t.title || t.url;
+        return path.basename(t.path);
+      }),
       volume: this.volume,
       loop: this.loop,
       shuffled: this.shuffled,
@@ -351,7 +420,8 @@ export class GuildPlayer {
       [this.queue[i], this.queue[j]] = [this.queue[j], this.queue[i]];
     }
     if (current) {
-      this.currentIndex = this.queue.indexOf(current);
+      const key = current.path || current.url;
+      this.currentIndex = this.queue.findIndex((t) => (t.path || t.url) === key);
     }
   }
 }

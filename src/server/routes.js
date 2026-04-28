@@ -3,6 +3,7 @@ import path from 'path';
 import multer from 'multer';
 import { Router } from 'express';
 import { getAudioDuration } from './player.js';
+import { NavidromeClient } from './navidrome.js';
 
 const PLAYLISTS_FILE = 'playlists.json';
 
@@ -109,9 +110,12 @@ export function createAPIRoutes(bot, audioDir) {
 
   router.post('/player/:guildId/play', (req, res) => {
     const { guildId } = req.params;
-    const { file } = req.body;
+    const { file, url, title, duration } = req.body;
     const player = bot.getPlayer(guildId);
-    if (file) {
+    if (url) {
+      const ok = player.playNowUrl(url, title, duration);
+      res.json(ok ? { success: true } : { error: 'Failed to play URL' });
+    } else if (file) {
       const ok = player.playNow(resolve(file));
       res.json(ok ? { success: true } : { error: 'Failed to play file' });
     } else {
@@ -153,7 +157,13 @@ export function createAPIRoutes(bot, audioDir) {
     const player = bot.getPlayer(req.params.guildId);
     const added = [];
     for (const f of req.body.files) {
-      if (player.addToQueue(resolve(f))) added.push(f);
+      if (typeof f === 'object' && f.url) {
+        player.addToQueueUrl(f.url, f.title, f.duration);
+        added.push(f.title || f.url);
+      } else {
+        const name = typeof f === 'string' ? f : f.path;
+        if (player.addToQueue(resolve(name))) added.push(name);
+      }
     }
     res.json({ success: true, added });
   });
@@ -265,6 +275,202 @@ export function createAPIRoutes(bot, audioDir) {
       player.addToQueue(resolve(f));
     }
     res.json({ success: true, added: pl.tracks.length });
+  });
+
+  // Navidrome routes
+  const navidrome = new NavidromeClient(
+    process.env.NAVIDROME_URL,
+    process.env.NAVIDROME_USER,
+    process.env.NAVIDROME_PASSWORD
+  );
+
+  router.get('/navidrome/status', (_req, res) => {
+    res.json({ available: navidrome.available });
+  });
+
+  router.get('/navidrome/ping', async (_req, res) => {
+    if (!navidrome.available) return res.status(503).json({ error: 'Navidrome not configured' });
+    try {
+      const result = await navidrome.ping();
+      res.json(result);
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  router.get('/navidrome/artists', async (_req, res) => {
+    try {
+      const artists = await navidrome.getArtists();
+      res.json(artists);
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  router.get('/navidrome/artists/:id', async (req, res) => {
+    try {
+      const artist = await navidrome.getArtist(req.params.id);
+      res.json(artist);
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  router.get('/navidrome/albums/:id', async (req, res) => {
+    try {
+      const album = await navidrome.getAlbum(req.params.id);
+      res.json(album);
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  router.get('/navidrome/search', async (req, res) => {
+    try {
+      const results = await navidrome.search(req.query.query || '');
+      res.json(results);
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  router.get('/navidrome/stream-url/:songId', (req, res) => {
+    const url = navidrome.getStreamUrl(req.params.songId);
+    if (!url) return res.status(503).json({ error: 'Navidrome not configured' });
+    res.json({ url });
+  });
+
+  router.post('/navidrome/play/:guildId/:songId', async (req, res) => {
+    try {
+      const song = await navidrome.getSong(req.params.songId);
+      const streamUrl = navidrome.getStreamUrl(req.params.songId);
+      if (!streamUrl) return res.status(503).json({ error: 'Navidrome not configured' });
+      const title = `${song.artist} - ${song.title}`;
+      const player = bot.getPlayer(req.params.guildId);
+      const ok = player.playNowUrl(streamUrl, title, song.duration);
+      res.json(ok ? { success: true } : { error: 'Failed to play' });
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  router.post('/navidrome/enqueue/:guildId/:songId', async (req, res) => {
+    try {
+      const song = await navidrome.getSong(req.params.songId);
+      const streamUrl = navidrome.getStreamUrl(req.params.songId);
+      if (!streamUrl) return res.status(503).json({ error: 'Navidrome not configured' });
+      const title = `${song.artist} - ${song.title}`;
+      const player = bot.getPlayer(req.params.guildId);
+      player.addToQueueUrl(streamUrl, title, song.duration);
+      res.json({ success: true });
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  router.post('/navidrome/queue-album/:guildId/:albumId', async (req, res) => {
+    try {
+      const album = await navidrome.getAlbum(req.params.albumId);
+      const player = bot.getPlayer(req.params.guildId);
+      for (const song of album.songs) {
+        const streamUrl = navidrome.getStreamUrl(song.id);
+        if (streamUrl) {
+          const title = `${song.artist} - ${song.title}`;
+          player.addToQueueUrl(streamUrl, title, song.duration);
+        }
+      }
+      res.json({ success: true, added: album.songs.length });
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  router.post('/navidrome/play-album/:guildId/:albumId', async (req, res) => {
+    try {
+      const album = await navidrome.getAlbum(req.params.albumId);
+      const player = bot.getPlayer(req.params.guildId);
+      player.clearQueue();
+      for (const song of album.songs) {
+        const streamUrl = navidrome.getStreamUrl(song.id);
+        if (streamUrl) {
+          const title = `${song.artist} - ${song.title}`;
+          player.addToQueueUrl(streamUrl, title, song.duration);
+        }
+      }
+      const ok = player.play();
+      res.json(ok ? { success: true } : { error: 'Failed to play album' });
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  router.get('/navidrome/cover/:coverArtId', async (req, res) => {
+    const url = navidrome.getCoverArtUrl(req.params.coverArtId);
+    if (!url) return res.status(404).json({ error: 'No cover art' });
+    try {
+      const imgRes = await fetch(url);
+      if (!imgRes.ok) return res.status(502).json({ error: 'Failed to fetch cover' });
+      res.set('Content-Type', imgRes.headers.get('content-type') || 'image/jpeg');
+      res.set('Cache-Control', 'public, max-age=3600');
+      const buf = Buffer.from(await imgRes.arrayBuffer());
+      res.send(buf);
+    } catch {
+      res.status(502).json({ error: 'Failed to fetch cover' });
+    }
+  });
+
+  router.get('/navidrome/playlists', async (_req, res) => {
+    try {
+      const playlists = await navidrome.getPlaylists();
+      res.json(playlists);
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  router.get('/navidrome/playlists/:id', async (req, res) => {
+    try {
+      const playlist = await navidrome.getPlaylist(req.params.id);
+      res.json(playlist);
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  router.post('/navidrome/play-playlist/:guildId/:id', async (req, res) => {
+    try {
+      const pl = await navidrome.getPlaylist(req.params.id);
+      const player = bot.getPlayer(req.params.guildId);
+      player.clearQueue();
+      for (const song of pl.songs) {
+        const streamUrl = navidrome.getStreamUrl(song.id);
+        if (streamUrl) {
+          const title = `${song.artist} - ${song.title}`;
+          player.addToQueueUrl(streamUrl, title, song.duration);
+        }
+      }
+      const ok = player.play();
+      res.json(ok ? { success: true } : { error: 'Failed to play playlist' });
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  router.post('/navidrome/queue-playlist/:guildId/:id', async (req, res) => {
+    try {
+      const pl = await navidrome.getPlaylist(req.params.id);
+      const player = bot.getPlayer(req.params.guildId);
+      for (const song of pl.songs) {
+        const streamUrl = navidrome.getStreamUrl(song.id);
+        if (streamUrl) {
+          const title = `${song.artist} - ${song.title}`;
+          player.addToQueueUrl(streamUrl, title, song.duration);
+        }
+      }
+      res.json({ success: true, added: pl.songs.length });
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
   });
 
   return router;

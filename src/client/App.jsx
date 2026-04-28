@@ -4,6 +4,7 @@ import ChannelBar from './components/ChannelBar';
 import PlayerSection from './components/PlayerSection';
 import QueuePanel from './components/QueuePanel';
 import LibraryPanel from './components/LibraryPanel';
+import NavidromePanel from './components/NavidromePanel';
 import './App.css';
 
 export default function App() {
@@ -16,6 +17,7 @@ export default function App() {
   const [status, setStatus] = useState(null);
   const [audioFiles, setAudioFiles] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [navOpen, setNavOpen] = useState(false);
   const pollRef = useRef(null);
   const statusRef = useRef(null);
   statusRef.current = status;
@@ -105,6 +107,7 @@ export default function App() {
           <select value={selectedGuild || ''} onChange={(e) => setSelectedGuild(e.target.value)}>
             {guilds.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
           </select>
+          {authed && <button className="navidrome-btn sm" onClick={() => setNavOpen(!navOpen)}>Navidrome</button>}
           <button className="secondary sm" onClick={handleLogout}>Logout</button>
         </div>
       </header>
@@ -118,14 +121,26 @@ export default function App() {
           <button className="secondary" onClick={loadData} style={{ marginTop: '1rem' }}>Retry</button>
         </div>
       ) : selectedGuild && (
-        <>
-          <ChannelBar guildId={selectedGuild} connectedChannel={connectedChannel} onUpdate={pollStatus} />
-          <div className="main-grid">
-            <PlayerSection guildId={selectedGuild} status={status} onUpdate={pollStatus} />
-            <QueuePanel guildId={selectedGuild} status={status} onUpdate={pollStatus} />
-            <LibraryPanel guildId={selectedGuild} files={audioFiles} onFilesChanged={refreshFiles} onQueueUpdate={pollStatus} />
+        <div className="app-body">
+          <div className={`offcanvas-overlay ${navOpen ? 'open' : ''}`} onClick={() => setNavOpen(false)} />
+          <aside className={`offcanvas ${navOpen ? 'open' : ''}`}>
+            <div className="offcanvas-header">
+              <h2>Navidrome</h2>
+              <button className="secondary sm" onClick={() => setNavOpen(false)}>Close</button>
+            </div>
+            <div className="offcanvas-content">
+              <NavidromePanel guildId={selectedGuild} onQueueUpdate={() => { pollStatus(); }} />
+            </div>
+          </aside>
+          <div className="main-content">
+            <ChannelBar guildId={selectedGuild} connectedChannel={connectedChannel} onUpdate={pollStatus} />
+            <div className="main-grid">
+              <PlayerSection guildId={selectedGuild} status={status} onUpdate={pollStatus} />
+              <QueuePanel guildId={selectedGuild} status={status} onUpdate={pollStatus} />
+              <LibraryPanel guildId={selectedGuild} files={audioFiles} onFilesChanged={refreshFiles} onQueueUpdate={pollStatus} />
+            </div>
           </div>
-        </>
+        </div>
       )}
     </div>
   );
