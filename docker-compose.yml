@@ -17,5 +17,5 @@ services:
     volumes:
       - ./audio:/app/audio
     ports:
-      - "${PORT:-3000}:3000"
+      - "3333:3000"
     restart: unless-stopped
