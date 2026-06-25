@@ -3,8 +3,6 @@ import path from 'path';
 import multer from 'multer';
 import { Router } from 'express';
 import { getAudioDuration } from './player.js';
-import { NavidromeClient } from './navidrome.js';
-
 const PLAYLISTS_FILE = 'playlists.json';
 
 const storage = multer.diskStorage({
@@ -30,7 +28,7 @@ const upload = multer({
   limits: { fileSize: 1024 * 1024 * 1024 },
 });
 
-export function createAPIRoutes(bot, audioDir) {
+export function createAPIRoutes(bot, audioDir, navidrome) {
   const router = Router();
   const resolvedAudioDir = path.resolve(audioDir);
 
@@ -278,12 +276,6 @@ export function createAPIRoutes(bot, audioDir) {
   });
 
   // Navidrome routes
-  const navidrome = new NavidromeClient(
-    process.env.NAVIDROME_URL,
-    process.env.NAVIDROME_USER,
-    process.env.NAVIDROME_PASSWORD,
-    process.env.NAVIDROME_INTERNAL_URL
-  );
 
   router.get('/navidrome/status', (_req, res) => {
     res.json({ available: navidrome.available });

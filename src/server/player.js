@@ -54,8 +54,9 @@ function createSeekableStream(filePath, seekSeconds) {
 }
 
 export class GuildPlayer {
-  constructor(guildId) {
+  constructor(guildId, onStatusChange) {
     this.guildId = guildId;
+    this.onStatusChange = onStatusChange;
     this.queue = [];
     this.originalQueue = [];
     this.currentIndex = -1;
@@ -76,6 +77,10 @@ export class GuildPlayer {
     this.seekOffset = 0;
     this.ffmpegProcess = null;
 
+    this._emitStatus = () => {
+      if (this.onStatusChange) this.onStatusChange(this.getStatus());
+    };
+
     this.audioPlayer.on('stateChange', (oldState, newState) => {
       if (newState.status === AudioPlayerStatus.Idle && oldState.status !== AudioPlayerStatus.Idle) {
         this.currentTrack = null;
@@ -85,16 +90,19 @@ export class GuildPlayer {
         this.playbackStartedAt = 0;
         this.seekOffset = 0;
         this.totalPausedMs = 0;
+        this._emitStatus();
         this._playNext();
       }
       if (newState.status === AudioPlayerStatus.Playing) {
         this.isPlaying = true;
         this.isPaused = false;
         if (!this.playbackStartedAt) this.playbackStartedAt = Date.now();
+        this._emitStatus();
       }
       if (newState.status === AudioPlayerStatus.Paused) {
         this.isPaused = true;
         this.pauseStartedAt = Date.now();
+        this._emitStatus();
       }
     });
 
@@ -432,18 +440,20 @@ export class GuildPlayer {
 }
 
 export class PlayerManager {
-  constructor() {
+  constructor(onStatusChange) {
     this.players = new Map();
+    this.onStatusChange = onStatusChange;
   }
   get(guildId) {
     if (!this.players.has(guildId)) {
-      this.players.set(guildId, new GuildPlayer(guildId));
+      this.players.set(guildId, new GuildPlayer(guildId, this.onStatusChange));
     }
     return this.players.get(guildId);
   }
   remove(guildId) {
     const player = this.players.get(guildId);
     if (player) { player.disconnect(); this.players.delete(guildId); }
+    if (this.onStatusChange) this.onStatusChange(null);
   }
   has(guildId) { return this.players.has(guildId); }
 }

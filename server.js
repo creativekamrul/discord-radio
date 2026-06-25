@@ -9,6 +9,7 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 import { RadioBot } from './src/server/bot.js';
 import { createAPIRoutes } from './src/server/routes.js';
+import { NavidromeClient } from './src/server/navidrome.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -32,9 +33,15 @@ if (DASHBOARD_PASSWORD) {
 }
 
 const TOKEN = process.env.DISCORD_TOKEN;
-const bot = new RadioBot(TOKEN);
+const navidrome = new NavidromeClient(
+  process.env.NAVIDROME_URL,
+  process.env.NAVIDROME_USER,
+  process.env.NAVIDROME_PASSWORD,
+  process.env.NAVIDROME_INTERNAL_URL
+);
+const bot = new RadioBot(TOKEN, navidrome);
 
-app.use('/api', createAPIRoutes(bot, AUDIO_DIR));
+app.use('/api', createAPIRoutes(bot, AUDIO_DIR, navidrome));
 
 const distPath = path.join(__dirname, 'dist');
 if (fs.existsSync(distPath)) {
