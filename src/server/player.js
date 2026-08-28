@@ -71,11 +71,15 @@ export class GuildPlayer {
     this.currentTrack = null;
     this.currentFilePath = null;
     this.currentDuration = 0;
+    this.currentSource = null;
+    this.currentCollection = null;
     this.playbackStartedAt = 0;
     this.totalPausedMs = 0;
     this.pauseStartedAt = 0;
     this.seekOffset = 0;
     this.ffmpegProcess = null;
+    this.sleepTimer = null;
+    this.sleepTimerEndsAt = 0;
 
     this._emitStatus = () => {
       if (this.onStatusChange) this.onStatusChange(this.getStatus());
@@ -87,6 +91,8 @@ export class GuildPlayer {
         this.currentResource = null;
         this.currentFilePath = null;
         this.currentDuration = 0;
+        this.currentSource = null;
+        this.currentCollection = null;
         this.playbackStartedAt = 0;
         this.seekOffset = 0;
         this.totalPausedMs = 0;
@@ -135,9 +141,10 @@ export class GuildPlayer {
     return true;
   }
 
-  addToQueueUrl(url, title, duration) {
-    this.queue.push({ type: 'url', url, title, duration: duration || 0 });
-    this.originalQueue.push({ type: 'url', url, title, duration: duration || 0 });
+  addToQueueUrl(url, title, duration, meta = {}) {
+    const item = { type: 'url', url, title, duration: duration || 0, ...meta };
+    this.queue.push(item);
+    this.originalQueue.push({ ...item });
     if (this.shuffled) this._shuffleQueue();
     return true;
   }
@@ -167,7 +174,7 @@ export class GuildPlayer {
     if (!resolved) return false;
 
     if (resolved.type === 'url') {
-      return this._playUrl(resolved.url, resolved.title, resolved.duration);
+      return this._playUrl(resolved.url, resolved.title, resolved.duration, resolved);
     }
 
     if (!fs.existsSync(resolved.path)) return false;
@@ -186,6 +193,8 @@ export class GuildPlayer {
       this.currentResource = resource;
       this.currentTrack = path.basename(resolved.path);
       this.currentFilePath = resolved.path;
+      this.currentSource = 'Local files';
+      this.currentCollection = null;
       this.currentIndex = this.queue.indexOf(resolved);
       this.seekOffset = 0;
       this.totalPausedMs = 0;
@@ -203,7 +212,7 @@ export class GuildPlayer {
     }
   }
 
-  _playUrl(url, title, duration) {
+  _playUrl(url, title, duration, meta = {}) {
     if (!this.connection) return false;
 
     this.audioPlayer.stop();
@@ -221,6 +230,8 @@ export class GuildPlayer {
       this.currentTrack = title || url;
       this.currentFilePath = url;
       this.currentDuration = duration || 0;
+      this.currentSource = meta.source || null;
+      this.currentCollection = meta.collection || null;
       this.seekOffset = 0;
       this.totalPausedMs = 0;
       this.playbackStartedAt = 0;
@@ -242,8 +253,8 @@ export class GuildPlayer {
     return this._playNext();
   }
 
-  playNowUrl(url, title, duration) {
-    this.addToQueueUrl(url, title, duration);
+  playNowUrl(url, title, duration, meta = {}) {
+    this.addToQueueUrl(url, title, duration, meta);
     const idx = this.queue.length - 1;
     this.currentIndex = idx - 1;
     return this._playNext();
@@ -310,6 +321,7 @@ export class GuildPlayer {
   }
 
   stop() {
+    this.cancelSleepTimer();
     this.audioPlayer.stop();
     this.isPlaying = false;
     this.isPaused = false;
@@ -317,6 +329,8 @@ export class GuildPlayer {
     this.currentResource = null;
     this.currentFilePath = null;
     this.currentDuration = 0;
+    this.currentSource = null;
+    this.currentCollection = null;
     this.playbackStartedAt = 0;
     this.seekOffset = 0;
     this.totalPausedMs = 0;
@@ -340,6 +354,27 @@ export class GuildPlayer {
     if (this.currentResource) {
       this.currentResource.volume.setVolume(this.volume);
     }
+  }
+
+  setSleepTimer(minutes) {
+    this.cancelSleepTimer();
+    const duration = Number(minutes);
+    if (!Number.isFinite(duration) || duration <= 0) return false;
+    this.sleepTimerEndsAt = Date.now() + duration * 60 * 1000;
+    this.sleepTimer = setTimeout(() => {
+      this.sleepTimer = null;
+      this.sleepTimerEndsAt = 0;
+      this.stop();
+    }, duration * 60 * 1000);
+    this._emitStatus();
+    return true;
+  }
+
+  cancelSleepTimer() {
+    if (this.sleepTimer) clearTimeout(this.sleepTimer);
+    this.sleepTimer = null;
+    this.sleepTimerEndsAt = 0;
+    this._emitStatus();
   }
 
   setLoop(mode) {
@@ -396,6 +431,9 @@ export class GuildPlayer {
       loop: this.loop,
       shuffled: this.shuffled,
       connected: !!this.connection,
+      source: this.currentSource,
+      collection: this.currentCollection,
+      sleepTimerSeconds: this.sleepTimerEndsAt ? Math.max(0, Math.ceil((this.sleepTimerEndsAt - Date.now()) / 1000)) : 0,
     };
   }
 

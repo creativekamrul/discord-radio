@@ -77,11 +77,7 @@ export default function LibraryPanel({ guildId, files, onFilesChanged, onQueueUp
               ) : (
                 playlists.map((pl) => (
                   <div key={pl.id} className="list-item navidrome-item" onClick={() => openPlaylist(pl.id)}>
-                    {pl.coverArt ? (
-                      <img className="navidrome-thumb" src={api.navidromeCoverUrl(pl.coverArt)} alt="" />
-                    ) : (
-                      <span className="navidrome-icon">📁</span>
-                    )}
+                    <span className="navidrome-icon">📁</span>
                     <span className="name">{pl.name}</span>
                     <span className="navidrome-meta">{pl.songCount} tracks</span>
                     <div className="actions">
@@ -97,11 +93,7 @@ export default function LibraryPanel({ guildId, files, onFilesChanged, onQueueUp
           {!loading && playlistDetail && (
             <>
               <div className="navidrome-detail-header">
-                {playlistDetail.coverArt ? (
-                  <img className="navidrome-cover" src={api.navidromeCoverUrl(playlistDetail.coverArt)} alt="" />
-                ) : (
-                  <span className="navidrome-icon large">📁</span>
-                )}
+                <span className="navidrome-icon large">📁</span>
                 <div>
                   <h3 style={{ margin: 0, fontSize: '1rem' }}>{playlistDetail.name}</h3>
                   <span className="navidrome-meta">{playlistDetail.songCount} tracks &middot; {fmt(playlistDetail.duration)}</span>

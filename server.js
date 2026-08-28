@@ -10,6 +10,7 @@ import fs from 'fs';
 import { RadioBot } from './src/server/bot.js';
 import { createAPIRoutes } from './src/server/routes.js';
 import { NavidromeClient } from './src/server/navidrome.js';
+import { AudiobookshelfClient } from './src/server/audiobookshelf.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -39,9 +40,10 @@ const navidrome = new NavidromeClient(
   process.env.NAVIDROME_PASSWORD,
   process.env.NAVIDROME_INTERNAL_URL
 );
-const bot = new RadioBot(TOKEN, navidrome);
+const audiobookshelf = new AudiobookshelfClient(process.env.AUDIOBOOKSHELF_URL, process.env.AUDIOBOOKSHELF_TOKEN, process.env.AUDIOBOOKSHELF_INTERNAL_URL);
+const bot = new RadioBot(TOKEN, navidrome, audiobookshelf);
 
-app.use('/api', createAPIRoutes(bot, AUDIO_DIR, navidrome));
+app.use('/api', createAPIRoutes(bot, AUDIO_DIR, navidrome, audiobookshelf));
 
 const distPath = path.join(__dirname, 'dist');
 if (fs.existsSync(distPath)) {

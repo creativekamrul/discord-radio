@@ -29,6 +29,9 @@ export default function PlayerSection({ guildId, status, onUpdate }) {
           <div className="np-subtitle">
             {status.isPaused ? 'Paused' : status.isPlaying ? `Track ${status.currentIndex + 1} of ${status.queueLength}` : 'Stopped'}
           </div>
+          {(status.source || status.collection) && (
+            <div className="np-context">{status.source}{status.collection ? ` · ${status.collection}` : ''}</div>
+          )}
         </div>
       </div>
 

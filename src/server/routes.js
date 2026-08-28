@@ -28,7 +28,7 @@ const upload = multer({
   limits: { fileSize: 1024 * 1024 * 1024 },
 });
 
-export function createAPIRoutes(bot, audioDir, navidrome) {
+export function createAPIRoutes(bot, audioDir, navidrome, audiobookshelf) {
   const router = Router();
   const resolvedAudioDir = path.resolve(audioDir);
 
@@ -340,7 +340,7 @@ export function createAPIRoutes(bot, audioDir, navidrome) {
       if (!streamUrl) return res.status(503).json({ error: 'Navidrome not configured' });
       const title = `${song.artist} - ${song.title}`;
       const player = bot.getPlayer(req.params.guildId);
-      const ok = player.playNowUrl(streamUrl, title, song.duration);
+      const ok = player.playNowUrl(streamUrl, title, song.duration, { source: 'Navidrome', collection: req.body.collection || null });
       res.json(ok ? { success: true } : { error: 'Failed to play' });
     } catch (err) {
       res.status(502).json({ error: err.message });
@@ -354,7 +354,7 @@ export function createAPIRoutes(bot, audioDir, navidrome) {
       if (!streamUrl) return res.status(503).json({ error: 'Navidrome not configured' });
       const title = `${song.artist} - ${song.title}`;
       const player = bot.getPlayer(req.params.guildId);
-      player.addToQueueUrl(streamUrl, title, song.duration);
+      player.addToQueueUrl(streamUrl, title, song.duration, { source: 'Navidrome', collection: req.body.collection || null });
       res.json({ success: true });
     } catch (err) {
       res.status(502).json({ error: err.message });
@@ -369,7 +369,7 @@ export function createAPIRoutes(bot, audioDir, navidrome) {
         const streamUrl = navidrome.getStreamUrl(song.id);
         if (streamUrl) {
           const title = `${song.artist} - ${song.title}`;
-          player.addToQueueUrl(streamUrl, title, song.duration);
+          player.addToQueueUrl(streamUrl, title, song.duration, { source: 'Navidrome', collection: album.name });
         }
       }
       res.json({ success: true, added: album.songs.length });
@@ -387,7 +387,7 @@ export function createAPIRoutes(bot, audioDir, navidrome) {
         const streamUrl = navidrome.getStreamUrl(song.id);
         if (streamUrl) {
           const title = `${song.artist} - ${song.title}`;
-          player.addToQueueUrl(streamUrl, title, song.duration);
+          player.addToQueueUrl(streamUrl, title, song.duration, { source: 'Navidrome', collection: album.name });
         }
       }
       const ok = player.play();
@@ -430,6 +430,72 @@ export function createAPIRoutes(bot, audioDir, navidrome) {
     }
   });
 
+  // Audiobookshelf routes
+  router.get('/audiobookshelf/status', (_req, res) => {
+    res.json({ available: audiobookshelf.available });
+  });
+
+  router.get('/audiobookshelf/ping', async (_req, res) => {
+    try { res.json(await audiobookshelf.ping()); }
+    catch (err) { res.status(502).json({ error: err.message }); }
+  });
+
+  router.get('/audiobookshelf/libraries', async (_req, res) => {
+    try { res.json(await audiobookshelf.getLibraries()); }
+    catch (err) { res.status(502).json({ error: err.message }); }
+  });
+
+  router.get('/audiobookshelf/libraries/:id/items', async (req, res) => {
+    try {
+      const result = await audiobookshelf.getLibraryItems(req.params.id, { sort: 'media.metadata.title' });
+      res.json({ ...result, results: (result.results || []).map((item) => audiobookshelf.normalizeItem(item)) });
+    } catch (err) { res.status(502).json({ error: err.message }); }
+  });
+
+  router.get('/audiobookshelf/libraries/:id/search', async (req, res) => {
+    try {
+      const result = await audiobookshelf.searchLibrary(req.params.id, req.query.query || '');
+      const key = result.book ? 'book' : 'podcast';
+      res.json({ ...result, [key]: (result[key] || []).map((entry) => audiobookshelf.normalizeItem(entry.libraryItem || entry)) });
+    } catch (err) { res.status(502).json({ error: err.message }); }
+  });
+
+  router.get('/audiobookshelf/items/:id', async (req, res) => {
+    try {
+      const item = await audiobookshelf.getItem(req.params.id);
+      res.json({ ...audiobookshelf.normalizeItem(item), raw: item });
+    } catch (err) { res.status(502).json({ error: err.message }); }
+  });
+
+  router.post('/audiobookshelf/play/:guildId/:id', async (req, res) => {
+    try {
+      const item = await audiobookshelf.getItem(req.params.id);
+      const session = await audiobookshelf.startPlayback(req.params.id, req.body.episodeId);
+      const tracks = session.audioTracks || [];
+      const player = bot.getPlayer(req.params.guildId);
+      player.clearQueue();
+      const title = item.media?.metadata?.title || 'Audiobook';
+      for (const track of tracks) {
+        player.addToQueueUrl(track.contentUrl, `${title}${track.title ? ` — ${track.title}` : ''}`, track.duration, { source: 'Audiobookshelf', collection: title });
+      }
+      const ok = player.play();
+      res.json(ok ? { success: true, added: tracks.length } : { error: 'Failed to play audiobook' });
+    } catch (err) { res.status(502).json({ error: err.message }); }
+  });
+
+  router.post('/audiobookshelf/queue/:guildId/:id', async (req, res) => {
+    try {
+      const item = await audiobookshelf.getItem(req.params.id);
+      const session = await audiobookshelf.startPlayback(req.params.id, req.body.episodeId);
+      const title = item.media?.metadata?.title || 'Audiobook';
+      const player = bot.getPlayer(req.params.guildId);
+      for (const track of session.audioTracks || []) {
+        player.addToQueueUrl(track.contentUrl, `${title}${track.title ? ` — ${track.title}` : ''}`, track.duration, { source: 'Audiobookshelf', collection: title });
+      }
+      res.json({ success: true, added: (session.audioTracks || []).length });
+    } catch (err) { res.status(502).json({ error: err.message }); }
+  });
+
   router.post('/navidrome/play-playlist/:guildId/:id', async (req, res) => {
     try {
       const pl = await navidrome.getPlaylist(req.params.id);
@@ -439,7 +505,7 @@ export function createAPIRoutes(bot, audioDir, navidrome) {
         const streamUrl = navidrome.getStreamUrl(song.id);
         if (streamUrl) {
           const title = `${song.artist} - ${song.title}`;
-          player.addToQueueUrl(streamUrl, title, song.duration);
+          player.addToQueueUrl(streamUrl, title, song.duration, { source: 'Navidrome', collection: pl.name });
         }
       }
       const ok = player.play();
@@ -457,7 +523,7 @@ export function createAPIRoutes(bot, audioDir, navidrome) {
         const streamUrl = navidrome.getStreamUrl(song.id);
         if (streamUrl) {
           const title = `${song.artist} - ${song.title}`;
-          player.addToQueueUrl(streamUrl, title, song.duration);
+          player.addToQueueUrl(streamUrl, title, song.duration, { source: 'Navidrome', collection: pl.name });
         }
       }
       res.json({ success: true, added: pl.songs.length });

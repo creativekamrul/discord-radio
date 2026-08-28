@@ -20,6 +20,8 @@ export default function NavidromePanel({ guildId, onQueueUpdate }) {
   const [searchResults, setSearchResults] = useState(null);
   const [loading, setLoading] = useState(false);
   const [breadcrumb, setBreadcrumb] = useState([]);
+  const [playlists, setPlaylists] = useState([]);
+  const [playlist, setPlaylist] = useState(null);
 
   useEffect(() => {
     api.navidromeStatus().then((r) => {
@@ -38,6 +40,34 @@ export default function NavidromePanel({ guildId, onQueueUpdate }) {
     } catch {}
     setLoading(false);
   }, []);
+
+  const loadPlaylists = useCallback(async () => {
+    setLoading(true);
+    try {
+      setPlaylists(await api.navidromePlaylists());
+      setPlaylist(null);
+      setView('playlists');
+      setBreadcrumb([]);
+    } catch {}
+    setLoading(false);
+  }, []);
+
+  const openPlaylist = async (id) => {
+    setLoading(true);
+    try {
+      setPlaylist(await api.navidromePlaylist(id));
+      setView('playlist');
+      setBreadcrumb([{ label: 'Playlists', action: loadPlaylists }]);
+    } catch { setPlaylist(null); }
+    setLoading(false);
+  };
+
+  const playPlaylist = (id) => api.navidromePlayPlaylist(guildId, id).then(onQueueUpdate);
+  const queuePlaylist = (id) => api.navidromeQueuePlaylist(guildId, id).then(onQueueUpdate);
+
+  useEffect(() => {
+    if (available) loadArtists();
+  }, [available, loadArtists]);
 
   const openArtist = useCallback(async (id, name) => {
     setLoading(true);
@@ -78,13 +108,13 @@ export default function NavidromePanel({ guildId, onQueueUpdate }) {
     setLoading(false);
   }, [searchQuery, loadArtists]);
 
-  const playSong = async (songId) => {
-    await api.navidromePlaySong(guildId, songId);
+  const playSong = async (songId, collection) => {
+    await api.navidromePlaySong(guildId, songId, collection);
     onQueueUpdate();
   };
 
-  const enqueueSong = async (songId) => {
-    await api.navidromeEnqueueSong(guildId, songId);
+  const enqueueSong = async (songId, collection) => {
+    await api.navidromeEnqueueSong(guildId, songId, collection);
     onQueueUpdate();
   };
 
@@ -131,9 +161,10 @@ export default function NavidromePanel({ guildId, onQueueUpdate }) {
 
       {loading && <p className="empty-state">Loading...</p>}
 
-      {!loading && (view === 'artists' || view === 'artist' || view === 'album') && (
+      {!loading && (view === 'artists' || view === 'artist' || view === 'album' || view === 'playlists' || view === 'playlist') && (
         <div className="section-tabs">
           <button className={`section-tab ${view === 'artists' ? 'active' : ''}`} onClick={loadArtists}>Artists</button>
+          <button className={`section-tab ${view === 'playlists' || view === 'playlist' ? 'active' : ''}`} onClick={loadPlaylists}>Playlists</button>
         </div>
       )}
 
@@ -158,17 +189,46 @@ export default function NavidromePanel({ guildId, onQueueUpdate }) {
           ) : (
             artists.map((a) => (
               <div key={a.id} className="list-item navidrome-item" onClick={() => openArtist(a.id, a.name)}>
-                {a.coverArt ? (
-                  <img className="navidrome-thumb" src={api.navidromeCoverUrl(a.coverArt)} alt="" />
-                ) : (
                   <span className="navidrome-icon">🎤</span>
-                )}
                 <span className="name">{a.name}</span>
                 <span className="navidrome-meta">{a.albumCount} albums</span>
               </div>
             ))
           )}
         </div>
+      )}
+
+      {!loading && view === 'playlists' && (
+        <div className="list navidrome-list">
+          {playlists.length === 0 ? <p className="empty-state">No playlists found</p> : playlists.map((pl) => (
+            <div key={pl.id} className="list-item navidrome-item navidrome-playlist-item" onClick={() => openPlaylist(pl.id)}>
+              <span className="navidrome-icon">📋</span>
+              <span className="name"><span className="song-title">{pl.name}</span><span className="song-artist">{pl.songCount || 0} tracks</span></span>
+              <div className="actions">
+                <button className="xs secondary" onClick={(e) => { e.stopPropagation(); queuePlaylist(pl.id); }}>+Q</button>
+                <button className="xs" onClick={(e) => { e.stopPropagation(); playPlaylist(pl.id); }}>▶</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!loading && view === 'playlist' && playlist && (
+        <>
+          <div className="navidrome-detail-header">
+            <div><h3 style={{ margin: 0 }}>{playlist.name}</h3><span className="navidrome-meta">{playlist.songs.length} tracks</span></div>
+            <div className="actions always-visible"><button className="xs secondary" onClick={() => queuePlaylist(playlist.id)}>Add to Queue</button><button className="xs" onClick={() => playPlaylist(playlist.id)}>Play All</button></div>
+          </div>
+          <div className="list navidrome-list">
+            {playlist.songs.map((s, i) => (
+              <div key={s.id} className="list-item navidrome-song-item">
+                <span className="idx">{i + 1}</span>
+                <span className="name"><span className="song-title">{s.title}</span><span className="song-artist">{s.artist} · {s.album}</span></span>
+                <div className="actions"><button className="xs secondary" onClick={() => enqueueSong(s.id, playlist.name)}>+Q</button><button className="xs" onClick={() => playSong(s.id, playlist.name)}>▶</button></div>
+              </div>
+            ))}
+          </div>
+        </>
       )}
 
       {!loading && view === 'artist' && artist && (
@@ -185,11 +245,7 @@ export default function NavidromePanel({ guildId, onQueueUpdate }) {
             ) : (
               artist.albums.map((a) => (
                 <div key={a.id} className="list-item navidrome-item" onClick={() => openAlbum(a.id, a.name, artist.name)}>
-                  {a.coverArt ? (
-                    <img className="navidrome-thumb" src={api.navidromeCoverUrl(a.coverArt)} alt="" />
-                  ) : (
-                    <span className="navidrome-icon">💿</span>
-                  )}
+                  <span className="navidrome-icon">💿</span>
                   <span className="name">{a.name}</span>
                   <span className="navidrome-meta">{a.year || ''} &middot; {a.songCount} tracks</span>
                   <div className="actions">
@@ -206,11 +262,7 @@ export default function NavidromePanel({ guildId, onQueueUpdate }) {
       {!loading && view === 'album' && album && (
         <>
           <div className="navidrome-detail-header">
-            {album.coverArt ? (
-              <img className="navidrome-cover" src={api.navidromeCoverUrl(album.coverArt)} alt="" />
-            ) : (
-              <span className="navidrome-icon large">💿</span>
-            )}
+            <span className="navidrome-icon large">💿</span>
             <div>
               <h3 style={{ margin: 0, fontSize: '1rem' }}>{album.name}</h3>
               <span className="navidrome-meta">{album.artist} {album.year ? `· ${album.year}` : ''} · {album.songCount} tracks</span>
@@ -248,11 +300,7 @@ export default function NavidromePanel({ guildId, onQueueUpdate }) {
               ) : (
                 searchResults.artists.map((a) => (
                   <div key={a.id} className="list-item navidrome-item" onClick={() => openArtist(a.id, a.name)}>
-                    {a.coverArt ? (
-                      <img className="navidrome-thumb" src={api.navidromeCoverUrl(a.coverArt)} alt="" />
-                    ) : (
-                      <span className="navidrome-icon">🎤</span>
-                    )}
+                    <span className="navidrome-icon">🎤</span>
                     <span className="name">{a.name}</span>
                     <span className="navidrome-meta">{a.albumCount} albums</span>
                   </div>
@@ -268,11 +316,7 @@ export default function NavidromePanel({ guildId, onQueueUpdate }) {
               ) : (
                 searchResults.albums.map((a) => (
                   <div key={a.id} className="list-item navidrome-item" onClick={() => openAlbum(a.id, a.name, a.artist)}>
-                    {a.coverArt ? (
-                      <img className="navidrome-thumb" src={api.navidromeCoverUrl(a.coverArt)} alt="" />
-                    ) : (
-                      <span className="navidrome-icon">💿</span>
-                    )}
+                    <span className="navidrome-icon">💿</span>
                     <span className="name">{a.name}</span>
                     <span className="navidrome-meta">{a.artist} {a.year ? `· ${a.year}` : ''}</span>
                     <div className="actions">
