@@ -4,7 +4,14 @@ FROM base AS deps
 RUN apk add --no-cache libc6-compat python3 make g++
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci \
+  --no-audit \
+  --no-fund \
+  --fetch-retries=5 \
+  --fetch-retry-factor=2 \
+  --fetch-retry-mintimeout=20000 \
+  --fetch-retry-maxtimeout=120000 \
+  --loglevel=verbose
 
 FROM base AS builder
 WORKDIR /app
