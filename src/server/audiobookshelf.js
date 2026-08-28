@@ -56,6 +56,22 @@ export class AudiobookshelfClient {
     return { ...session, audioTracks: (session.audioTracks || []).map((track) => ({ ...track, contentUrl: this._streamUrl(track.contentUrl) })) };
   }
 
+  async syncPlayback(sessionId, currentTime, timeListened, duration) {
+    return this._request(`/api/session/${encodeURIComponent(sessionId)}/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ currentTime, timeListened, duration }),
+    });
+  }
+
+  async closePlayback(sessionId, currentTime, timeListened, duration) {
+    return this._request(`/api/session/${encodeURIComponent(sessionId)}/close`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ currentTime, timeListened, duration }),
+    });
+  }
+
   getCoverUrl(itemId, updatedAt) {
     if (!this.available || !itemId) return null;
     const url = new URL(`/api/items/${encodeURIComponent(itemId)}/cover`, `${this.streamBaseUrl}/`);

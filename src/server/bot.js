@@ -40,7 +40,18 @@ export class RadioBot {
         GatewayIntentBits.GuildVoiceStates,
       ],
     });
-    this.playerManager = new PlayerManager((status) => this._updatePresence(status));
+    this.absSyncState = new Map();
+    this.playerManager = new PlayerManager(
+      (status) => this._updatePresence(status),
+      (event, playback) => this._handlePlaybackEvent(event, playback),
+    );
+    this.absSyncTimer = setInterval(() => {
+      for (const player of this.playerManager.players.values()) {
+        const status = player.getStatus();
+        if (status.isPlaying || status.isPaused) this._syncAudiobookshelf(status);
+      }
+    }, 15000);
+    this.absSyncTimer.unref?.();
     this.playerPanels = new Map();
     this.ready = false;
 
@@ -201,6 +212,47 @@ export class RadioBot {
       this.client.user.setActivity('🎵 nothing', { type: 2 });
     }
     if (status?.guildId) this._updatePlayerPanel(status.guildId);
+    if (status?.audiobookshelfSessionId) this._syncAudiobookshelf(status);
+  }
+
+  async _handlePlaybackEvent(event, playback) {
+    if (!playback?.sessionId) return;
+    if (event === 'stop' || event === 'session-ended') {
+      const finalPlayback = event === 'session-ended' && playback.duration
+        ? { ...playback, currentTime: playback.duration }
+        : playback;
+      await this._syncAudiobookshelf(finalPlayback, true, true);
+      return;
+    }
+    await this._syncAudiobookshelf(playback, true, false);
+  }
+
+  async _syncAudiobookshelf(playback, force = false, close = false) {
+    if (!this.audiobookshelf.available || !playback?.sessionId) return;
+    const key = playback.guildId || playback.sessionId;
+    const now = Date.now();
+    const previous = this.absSyncState.get(key);
+    if (!close && !force && previous?.sessionId === playback.sessionId && now - previous.syncedAt < 14000) return;
+    if (previous?.syncing) return;
+    const currentTime = Math.max(0, Number(playback.currentTime) || 0);
+    const duration = Math.max(0, Number(playback.duration) || 0);
+    const timeListened = previous?.sessionId === playback.sessionId
+      ? Math.max(0, currentTime - previous.position)
+      : 0;
+    this.absSyncState.set(key, { sessionId: playback.sessionId, position: currentTime, syncedAt: now, syncing: true });
+    try {
+      if (close) {
+        await this.audiobookshelf.closePlayback(playback.sessionId, currentTime, timeListened, duration);
+        this.absSyncState.delete(key);
+      } else {
+        await this.audiobookshelf.syncPlayback(playback.sessionId, currentTime, timeListened, duration);
+        this.absSyncState.set(key, { sessionId: playback.sessionId, position: currentTime, syncedAt: Date.now(), syncing: false });
+      }
+    } catch (err) {
+      console.warn(`[Audiobookshelf] Progress sync failed: ${err.message}`);
+      const state = this.absSyncState.get(key);
+      if (state) state.syncing = false;
+    }
   }
 
   _playerPanelPayload(guildId) {
@@ -640,9 +692,23 @@ export class RadioBot {
     const episode = episodeId ? (item.media?.episodes || []).find((entry) => entry.id === episodeId) : null;
     const title = episode?.title || episode?.displayTitle || item.media?.metadata?.title || 'Audiobook';
     const player = this.playerManager.get(guildId);
+    player.stop();
     player.clearQueue();
-    for (const track of session.audioTracks || []) {
-      player.addToQueueUrl(track.contentUrl, `${title}${track.title ? ` — ${track.title}` : ''}`, track.duration, { source: 'Audiobookshelf', collection: title });
+    const sessionId = session.id || session.sessionId;
+    const tracks = session.audioTracks || [];
+    const totalDuration = Number(session.duration || item.media?.duration || tracks.reduce((sum, track) => sum + (Number(track.duration) || 0), 0));
+    let offset = 0;
+    for (const track of tracks) {
+      player.addToQueueUrl(track.contentUrl, `${title}${track.title ? ` — ${track.title}` : ''}`, track.duration, {
+        source: 'Audiobookshelf',
+        collection: title,
+        absSessionId: sessionId,
+        absItemId: itemId,
+        absEpisodeId: episodeId || null,
+        absOffset: offset,
+        absDuration: totalDuration,
+      });
+      offset += Number(track.duration) || 0;
     }
     player.play();
     return title;

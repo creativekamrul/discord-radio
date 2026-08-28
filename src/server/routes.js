@@ -473,10 +473,18 @@ export function createAPIRoutes(bot, audioDir, navidrome, audiobookshelf) {
       const session = await audiobookshelf.startPlayback(req.params.id, req.body.episodeId);
       const tracks = session.audioTracks || [];
       const player = bot.getPlayer(req.params.guildId);
+      player.stop();
       player.clearQueue();
       const title = item.media?.metadata?.title || 'Audiobook';
+      const sessionId = session.id || session.sessionId;
+      const totalDuration = Number(session.duration || item.media?.duration || tracks.reduce((sum, track) => sum + (Number(track.duration) || 0), 0));
+      let offset = 0;
       for (const track of tracks) {
-        player.addToQueueUrl(track.contentUrl, `${title}${track.title ? ` — ${track.title}` : ''}`, track.duration, { source: 'Audiobookshelf', collection: title });
+        player.addToQueueUrl(track.contentUrl, `${title}${track.title ? ` — ${track.title}` : ''}`, track.duration, {
+          source: 'Audiobookshelf', collection: title, absSessionId: sessionId, absItemId: req.params.id,
+          absEpisodeId: req.body.episodeId || null, absOffset: offset, absDuration: totalDuration,
+        });
+        offset += Number(track.duration) || 0;
       }
       const ok = player.play();
       res.json(ok ? { success: true, added: tracks.length } : { error: 'Failed to play audiobook' });
@@ -489,8 +497,17 @@ export function createAPIRoutes(bot, audioDir, navidrome, audiobookshelf) {
       const session = await audiobookshelf.startPlayback(req.params.id, req.body.episodeId);
       const title = item.media?.metadata?.title || 'Audiobook';
       const player = bot.getPlayer(req.params.guildId);
-      for (const track of session.audioTracks || []) {
-        player.addToQueueUrl(track.contentUrl, `${title}${track.title ? ` — ${track.title}` : ''}`, track.duration, { source: 'Audiobookshelf', collection: title });
+      player.stop();
+      const tracks = session.audioTracks || [];
+      const sessionId = session.id || session.sessionId;
+      const totalDuration = Number(session.duration || item.media?.duration || tracks.reduce((sum, track) => sum + (Number(track.duration) || 0), 0));
+      let offset = 0;
+      for (const track of tracks) {
+        player.addToQueueUrl(track.contentUrl, `${title}${track.title ? ` — ${track.title}` : ''}`, track.duration, {
+          source: 'Audiobookshelf', collection: title, absSessionId: sessionId, absItemId: req.params.id,
+          absEpisodeId: req.body.episodeId || null, absOffset: offset, absDuration: totalDuration,
+        });
+        offset += Number(track.duration) || 0;
       }
       res.json({ success: true, added: (session.audioTracks || []).length });
     } catch (err) { res.status(502).json({ error: err.message }); }

@@ -54,9 +54,10 @@ function createSeekableStream(filePath, seekSeconds) {
 }
 
 export class GuildPlayer {
-  constructor(guildId, onStatusChange) {
+  constructor(guildId, onStatusChange, onPlaybackEvent) {
     this.guildId = guildId;
     this.onStatusChange = onStatusChange;
+    this.onPlaybackEvent = onPlaybackEvent;
     this.queue = [];
     this.originalQueue = [];
     this.currentIndex = -1;
@@ -73,6 +74,11 @@ export class GuildPlayer {
     this.currentDuration = 0;
     this.currentSource = null;
     this.currentCollection = null;
+    this.currentAbsSessionId = null;
+    this.currentAbsItemId = null;
+    this.currentAbsEpisodeId = null;
+    this.currentAbsOffset = 0;
+    this.currentAbsDuration = 0;
     this.playbackStartedAt = 0;
     this.totalPausedMs = 0;
     this.pauseStartedAt = 0;
@@ -87,17 +93,25 @@ export class GuildPlayer {
 
     this.audioPlayer.on('stateChange', (oldState, newState) => {
       if (newState.status === AudioPlayerStatus.Idle && oldState.status !== AudioPlayerStatus.Idle) {
+        const ended = this._getAudiobookshelfPlayback();
+        const hasNext = this.queue.length > 0 && (this.loop === 'queue' || this.currentIndex + 1 < this.queue.length);
         this.currentTrack = null;
         this.currentResource = null;
         this.currentFilePath = null;
         this.currentDuration = 0;
         this.currentSource = null;
         this.currentCollection = null;
+        this.currentAbsSessionId = null;
+        this.currentAbsItemId = null;
+        this.currentAbsEpisodeId = null;
+        this.currentAbsOffset = 0;
+        this.currentAbsDuration = 0;
         this.playbackStartedAt = 0;
         this.seekOffset = 0;
         this.totalPausedMs = 0;
         this._emitStatus();
-        this._playNext();
+        const startedNext = this._playNext();
+        if (ended?.sessionId) this.onPlaybackEvent?.(startedNext || hasNext ? 'track-ended' : 'session-ended', ended);
       }
       if (newState.status === AudioPlayerStatus.Playing) {
         this.isPlaying = true;
@@ -195,6 +209,11 @@ export class GuildPlayer {
       this.currentFilePath = resolved.path;
       this.currentSource = 'Local files';
       this.currentCollection = null;
+      this.currentAbsSessionId = null;
+      this.currentAbsItemId = null;
+      this.currentAbsEpisodeId = null;
+      this.currentAbsOffset = 0;
+      this.currentAbsDuration = 0;
       this.currentIndex = this.queue.indexOf(resolved);
       this.seekOffset = 0;
       this.totalPausedMs = 0;
@@ -232,6 +251,11 @@ export class GuildPlayer {
       this.currentDuration = duration || 0;
       this.currentSource = meta.source || null;
       this.currentCollection = meta.collection || null;
+      this.currentAbsSessionId = meta.absSessionId || null;
+      this.currentAbsItemId = meta.absItemId || null;
+      this.currentAbsEpisodeId = meta.absEpisodeId || null;
+      this.currentAbsOffset = Number(meta.absOffset) || 0;
+      this.currentAbsDuration = Number(meta.absDuration) || Number(duration) || 0;
       this.seekOffset = 0;
       this.totalPausedMs = 0;
       this.playbackStartedAt = 0;
@@ -302,6 +326,7 @@ export class GuildPlayer {
 
   pause() {
     if (this.audioPlayer.state.status === AudioPlayerStatus.Playing) {
+      this.onPlaybackEvent?.('pause', this._getAudiobookshelfPlayback());
       this.audioPlayer.pause();
       return true;
     }
@@ -321,6 +346,7 @@ export class GuildPlayer {
   }
 
   stop() {
+    this.onPlaybackEvent?.('stop', this._getAudiobookshelfPlayback());
     this.cancelSleepTimer();
     this.audioPlayer.stop();
     this.isPlaying = false;
@@ -331,6 +357,11 @@ export class GuildPlayer {
     this.currentDuration = 0;
     this.currentSource = null;
     this.currentCollection = null;
+    this.currentAbsSessionId = null;
+    this.currentAbsItemId = null;
+    this.currentAbsEpisodeId = null;
+    this.currentAbsOffset = 0;
+    this.currentAbsDuration = 0;
     this.playbackStartedAt = 0;
     this.seekOffset = 0;
     this.totalPausedMs = 0;
@@ -433,7 +464,24 @@ export class GuildPlayer {
       connected: !!this.connection,
       source: this.currentSource,
       collection: this.currentCollection,
+      audiobookshelfSessionId: this.currentAbsSessionId,
+      audiobookshelfItemId: this.currentAbsItemId,
+      audiobookshelfEpisodeId: this.currentAbsEpisodeId,
+      audiobookshelfOffset: this.currentAbsOffset,
+      audiobookshelfDuration: this.currentAbsDuration,
       sleepTimerSeconds: this.sleepTimerEndsAt ? Math.max(0, Math.ceil((this.sleepTimerEndsAt - Date.now()) / 1000)) : 0,
+    };
+  }
+
+  _getAudiobookshelfPlayback() {
+    if (!this.currentAbsSessionId) return null;
+    return {
+      guildId: this.guildId,
+      sessionId: this.currentAbsSessionId,
+      itemId: this.currentAbsItemId,
+      episodeId: this.currentAbsEpisodeId,
+      currentTime: this.currentAbsOffset + this.getCurrentTime(),
+      duration: this.currentAbsDuration || this.currentDuration,
     };
   }
 
@@ -478,13 +526,14 @@ export class GuildPlayer {
 }
 
 export class PlayerManager {
-  constructor(onStatusChange) {
+  constructor(onStatusChange, onPlaybackEvent) {
     this.players = new Map();
     this.onStatusChange = onStatusChange;
+    this.onPlaybackEvent = onPlaybackEvent;
   }
   get(guildId) {
     if (!this.players.has(guildId)) {
-      this.players.set(guildId, new GuildPlayer(guildId, this.onStatusChange));
+      this.players.set(guildId, new GuildPlayer(guildId, this.onStatusChange, this.onPlaybackEvent));
     }
     return this.players.get(guildId);
   }
