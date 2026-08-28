@@ -1,7 +1,9 @@
-FROM node:22-alpine AS base
+FROM node:20-bookworm-slim AS base
 
 FROM base AS deps
-RUN apk add --no-cache libc6-compat python3 make g++
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci \
@@ -22,9 +24,11 @@ RUN npm run build
 FROM base AS runner
 WORKDIR /app
 ENV NODE_ENV=production
-RUN apk add --no-cache su-exec
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends gosu ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 RUN addgroup --system --gid 1001 appgroup
-RUN adduser --system --uid 1001 appuser
+RUN adduser --system --uid 1001 --ingroup appgroup appuser
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/server.js ./server.js
