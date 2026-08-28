@@ -20,7 +20,10 @@ function createUrlStream(url, seekSeconds) {
   let stderr = '';
   proc.stderr.on('data', (d) => { stderr += d.toString(); });
   proc.on('error', (err) => { console.error(`[FFmpeg URL] spawn error: ${err.message}`); });
-  proc.on('close', (code) => { if (code && code !== 0) console.error(`[FFmpeg URL] exit code ${code}: ${stderr}`); });
+  proc.on('close', (code, signal) => {
+    const expectedClose = signal === 'SIGTERM' || signal === 'SIGKILL' || /Connection reset by peer|Broken pipe|Error muxing a packet/i.test(stderr);
+    if (code && code !== 0 && !expectedClose) console.error(`[FFmpeg URL] exit code ${code}: ${stderr}`);
+  });
   return proc;
 }
 
@@ -51,6 +54,12 @@ function createSeekableStream(filePath, seekSeconds) {
     '-f', 's16le', '-ar', '48000', '-ac', '2', '-map', 'a', 'pipe:1');
   const proc = spawn(ffmpegPath, args, { windowsHide: true });
   return proc;
+}
+
+function stopFfmpegProcess(proc) {
+  if (proc && !proc.killed) {
+    try { proc.kill(); } catch {}
+  }
 }
 
 export class GuildPlayer {
@@ -193,6 +202,8 @@ export class GuildPlayer {
 
     if (!fs.existsSync(resolved.path)) return false;
 
+    stopFfmpegProcess(this.ffmpegProcess);
+    this.ffmpegProcess = null;
     this.audioPlayer.stop();
 
     try {
@@ -234,6 +245,8 @@ export class GuildPlayer {
   _playUrl(url, title, duration, meta = {}) {
     if (!this.connection) return false;
 
+    stopFfmpegProcess(this.ffmpegProcess);
+    this.ffmpegProcess = null;
     this.audioPlayer.stop();
 
     try {
@@ -295,6 +308,8 @@ export class GuildPlayer {
     if (!this.currentFilePath || !this.connection) return false;
     if (this.currentDuration) seconds = Math.max(0, Math.min(seconds, this.currentDuration));
 
+    stopFfmpegProcess(this.ffmpegProcess);
+    this.ffmpegProcess = null;
     this.audioPlayer.stop();
 
     try {
@@ -348,6 +363,8 @@ export class GuildPlayer {
   stop() {
     this.onPlaybackEvent?.('stop', this._getAudiobookshelfPlayback());
     this.cancelSleepTimer();
+    stopFfmpegProcess(this.ffmpegProcess);
+    this.ffmpegProcess = null;
     this.audioPlayer.stop();
     this.isPlaying = false;
     this.isPaused = false;
@@ -368,12 +385,16 @@ export class GuildPlayer {
   }
 
   skip() {
+    stopFfmpegProcess(this.ffmpegProcess);
+    this.ffmpegProcess = null;
     this.audioPlayer.stop();
   }
 
   previous() {
     if (this.currentIndex > 0) {
       this.currentIndex -= 2;
+      stopFfmpegProcess(this.ffmpegProcess);
+      this.ffmpegProcess = null;
       this.audioPlayer.stop();
       return true;
     }
