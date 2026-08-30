@@ -8,18 +8,22 @@ services:
     environment:
       DISCORD_TOKEN: "${DISCORD_TOKEN}"
       DISCORD_CLIENT_ID: "${DISCORD_CLIENT_ID}"
-      PORT: "${PORT:-3000}"
+      PORT: "3000"
       AUDIO_DIR: "/app/audio"
+      PLAYLISTS_FILE: "/app/data/playlists.json"
       DASHBOARD_PASSWORD: "${DASHBOARD_PASSWORD}"
       NAVIDROME_URL: "${NAVIDROME_URL}"
       NAVIDROME_INTERNAL_URL: "${NAVIDROME_INTERNAL_URL}"
       NAVIDROME_USER: "${NAVIDROME_USER}"
       NAVIDROME_PASSWORD: "${NAVIDROME_PASSWORD}"
+      NAVIDROME_DEBUG: "${NAVIDROME_DEBUG:-false}"
       AUDIOBOOKSHELF_URL: "${AUDIOBOOKSHELF_URL}"
       AUDIOBOOKSHELF_INTERNAL_URL: "${AUDIOBOOKSHELF_INTERNAL_URL}"
       AUDIOBOOKSHELF_TOKEN: "${AUDIOBOOKSHELF_TOKEN}"
+      DISCORD_VOICE_DEBUG: "${DISCORD_VOICE_DEBUG:-false}"
     volumes:
-      - ./audio:/app/audio
+      - "${AUDIO_HOST_PATH:-./audio}:/app/audio"
+      - "${DATA_HOST_PATH:-./data}:/app/data"
     ports:
-      - "3333:3000"
+      - "${DASHBOARD_PORT:-3333}:3000"
     restart: unless-stopped

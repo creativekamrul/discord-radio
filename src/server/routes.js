@@ -3,7 +3,7 @@ import path from 'path';
 import multer from 'multer';
 import { Router } from 'express';
 import { getAudioDuration } from './player.js';
-const PLAYLISTS_FILE = 'playlists.json';
+const PLAYLISTS_FILE = process.env.PLAYLISTS_FILE || 'playlists.json';
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, req._audioDir),
@@ -32,6 +32,10 @@ export function createAPIRoutes(bot, audioDir, navidrome, audiobookshelf) {
   const router = Router();
   const resolvedAudioDir = path.resolve(audioDir);
 
+  router.get('/config', (_req, res) => {
+    res.json({ discordClientId: process.env.DISCORD_CLIENT_ID || '' });
+  });
+
   function loadPlaylists() {
     const fp = path.resolve(PLAYLISTS_FILE);
     if (!fs.existsSync(fp)) return [];
@@ -50,6 +54,28 @@ export function createAPIRoutes(bot, audioDir, navidrome, audiobookshelf) {
   function resolve(filePath) {
     const base = path.basename(filePath);
     return path.join(resolvedAudioDir, base);
+  }
+
+  function queueAudiobookshelfTracks(player, title, session, itemId, episodeId, resumeTime = 0) {
+    const tracks = session.audioTracks || [];
+    const totalDuration = Number(session.duration || 0) || tracks.reduce((sum, track) => sum + (Number(track.duration) || 0), 0);
+    const resume = Math.max(0, Number(resumeTime) || 0);
+    let offset = 0;
+    for (let index = 0; index < tracks.length; index += 1) {
+      const track = tracks[index];
+      const trackDuration = Number(track.duration) || 0;
+      if (offset + trackDuration <= resume && index < tracks.length - 1) {
+        offset += trackDuration;
+        continue;
+      }
+      player.addToQueueUrl(track.contentUrl, `${title}${track.title ? ` — ${track.title}` : ''}`, track.duration, {
+        source: 'Audiobookshelf', collection: title, absSessionId: session.id || session.sessionId, absItemId: itemId,
+        absEpisodeId: episodeId || null, absOffset: offset, absStartOffset: Math.max(0, resume - offset), absDuration: totalDuration,
+        absChapterTitle: track.title || null,
+      });
+      offset += trackDuration;
+    }
+    return tracks.length;
   }
 
   router.get('/guilds', (req, res) => {
@@ -340,7 +366,7 @@ export function createAPIRoutes(bot, audioDir, navidrome, audiobookshelf) {
       if (!streamUrl) return res.status(503).json({ error: 'Navidrome not configured' });
       const title = `${song.artist} - ${song.title}`;
       const player = bot.getPlayer(req.params.guildId);
-      const ok = player.playNowUrl(streamUrl, title, song.duration, { source: 'Navidrome', collection: req.body.collection || null });
+      const ok = player.playNowUrl(streamUrl, title, song.duration, { source: 'Navidrome', collection: req.body.collection || null, navidromeSongId: song.id });
       res.json(ok ? { success: true } : { error: 'Failed to play' });
     } catch (err) {
       res.status(502).json({ error: err.message });
@@ -369,7 +395,7 @@ export function createAPIRoutes(bot, audioDir, navidrome, audiobookshelf) {
         const streamUrl = navidrome.getStreamUrl(song.id);
         if (streamUrl) {
           const title = `${song.artist} - ${song.title}`;
-          player.addToQueueUrl(streamUrl, title, song.duration, { source: 'Navidrome', collection: album.name });
+          player.addToQueueUrl(streamUrl, title, song.duration, { source: 'Navidrome', collection: album.name, navidromeSongId: song.id });
         }
       }
       res.json({ success: true, added: album.songs.length });
@@ -387,7 +413,7 @@ export function createAPIRoutes(bot, audioDir, navidrome, audiobookshelf) {
         const streamUrl = navidrome.getStreamUrl(song.id);
         if (streamUrl) {
           const title = `${song.artist} - ${song.title}`;
-          player.addToQueueUrl(streamUrl, title, song.duration, { source: 'Navidrome', collection: album.name });
+          player.addToQueueUrl(streamUrl, title, song.duration, { source: 'Navidrome', collection: album.name, navidromeSongId: song.id });
         }
       }
       const ok = player.play();
@@ -462,32 +488,64 @@ export function createAPIRoutes(bot, audioDir, navidrome, audiobookshelf) {
 
   router.get('/audiobookshelf/items/:id', async (req, res) => {
     try {
-      const item = await audiobookshelf.getItem(req.params.id);
-      res.json({ ...audiobookshelf.normalizeItem(item), raw: item });
+      const [item, user] = await Promise.all([
+        audiobookshelf.getItem(req.params.id),
+        audiobookshelf.getMe(),
+      ]);
+      const normalized = audiobookshelf.normalizeItem(item);
+      const progressByEpisode = new Map(
+        (user.mediaProgress || [])
+          .filter((progress) => progress.libraryItemId === req.params.id && progress.episodeId)
+          .map((progress) => [progress.episodeId, progress]),
+      );
+      normalized.episodes = (normalized.episodes || []).map((episode) => {
+        const progress = progressByEpisode.get(episode.id);
+        return {
+          ...episode,
+          currentTime: Number(progress?.currentTime) || 0,
+          progressPercent: Number(progress?.progress) || 0,
+          finished: Boolean(progress?.isFinished),
+        };
+      });
+      res.json({ ...normalized, raw: item });
+    } catch (err) { res.status(502).json({ error: err.message }); }
+  });
+
+  router.get('/audiobookshelf/continue-listening', async (_req, res) => {
+    try {
+      const result = await audiobookshelf.getItemsInProgress(25);
+      const items = await Promise.all((result.libraryItems || []).map(async (item) => {
+        const detail = await audiobookshelf.getItem(item.id, item.recentEpisode?.id);
+        const recentEpisode = item.recentEpisode || detail.recentEpisode;
+        const filename = recentEpisode?.audioFile?.metadata?.filename || recentEpisode?.audioFile?.filename || '';
+        return { ...audiobookshelf.normalizeItem({ ...item, ...detail, recentEpisode }), episodeFileName: filename };
+      }));
+      res.json(items);
+    } catch (err) { res.status(502).json({ error: err.message }); }
+  });
+
+  router.patch('/audiobookshelf/progress/:id', async (req, res) => {
+    try {
+      res.json(await audiobookshelf.updateProgress(req.params.id, req.body.episodeId || null, {
+        currentTime: Number(req.body.currentTime) || 0,
+        duration: Number(req.body.duration) || 0,
+        isFinished: Boolean(req.body.isFinished),
+      }));
     } catch (err) { res.status(502).json({ error: err.message }); }
   });
 
   router.post('/audiobookshelf/play/:guildId/:id', async (req, res) => {
     try {
-      const item = await audiobookshelf.getItem(req.params.id);
+      const item = await audiobookshelf.getItem(req.params.id, req.body.episodeId);
       const session = await audiobookshelf.startPlayback(req.params.id, req.body.episodeId);
-      const tracks = session.audioTracks || [];
       const player = bot.getPlayer(req.params.guildId);
       player.stop();
       player.clearQueue();
       const title = item.media?.metadata?.title || 'Audiobook';
-      const sessionId = session.id || session.sessionId;
-      const totalDuration = Number(session.duration || item.media?.duration || tracks.reduce((sum, track) => sum + (Number(track.duration) || 0), 0));
-      let offset = 0;
-      for (const track of tracks) {
-        player.addToQueueUrl(track.contentUrl, `${title}${track.title ? ` — ${track.title}` : ''}`, track.duration, {
-          source: 'Audiobookshelf', collection: title, absSessionId: sessionId, absItemId: req.params.id,
-          absEpisodeId: req.body.episodeId || null, absOffset: offset, absDuration: totalDuration,
-        });
-        offset += Number(track.duration) || 0;
-      }
+      const resume = item.userMediaProgress?.currentTime || 0;
+      const count = queueAudiobookshelfTracks(player, title, session, req.params.id, req.body.episodeId, resume);
       const ok = player.play();
-      res.json(ok ? { success: true, added: tracks.length } : { error: 'Failed to play audiobook' });
+      res.json(ok ? { success: true, added: count, resumedAt: resume } : { error: 'Failed to play audiobook' });
     } catch (err) { res.status(502).json({ error: err.message }); }
   });
 
@@ -522,7 +580,7 @@ export function createAPIRoutes(bot, audioDir, navidrome, audiobookshelf) {
         const streamUrl = navidrome.getStreamUrl(song.id);
         if (streamUrl) {
           const title = `${song.artist} - ${song.title}`;
-          player.addToQueueUrl(streamUrl, title, song.duration, { source: 'Navidrome', collection: pl.name });
+          player.addToQueueUrl(streamUrl, title, song.duration, { source: 'Navidrome', collection: pl.name, navidromeSongId: song.id });
         }
       }
       const ok = player.play();
@@ -540,7 +598,7 @@ export function createAPIRoutes(bot, audioDir, navidrome, audiobookshelf) {
         const streamUrl = navidrome.getStreamUrl(song.id);
         if (streamUrl) {
           const title = `${song.artist} - ${song.title}`;
-          player.addToQueueUrl(streamUrl, title, song.duration, { source: 'Navidrome', collection: pl.name });
+          player.addToQueueUrl(streamUrl, title, song.duration, { source: 'Navidrome', collection: pl.name, navidromeSongId: song.id });
         }
       }
       res.json({ success: true, added: pl.songs.length });

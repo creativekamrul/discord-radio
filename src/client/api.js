@@ -12,10 +12,13 @@ async function request(method, url, body) {
   if (body !== undefined) opts.body = JSON.stringify(body);
   const res = await fetch(`${BASE}${url}`, opts);
   if (res.status === 401) throw new Error('UNAUTHORIZED');
-  return res.json();
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) throw new Error(data.error || data.message || `Request failed (${res.status})`);
+  return data;
 }
 
 export const api = {
+  getConfig: () => request('GET', '/config'),
   getGuilds: () => request('GET', '/guilds'),
   getChannels: (guildId) => request('GET', `/guilds/${guildId}/channels`),
   getConnected: (guildId) => request('GET', `/guilds/${guildId}/connected`),
@@ -80,4 +83,6 @@ export const api = {
   audiobookshelfPlay: (guildId, id, episodeId) => request('POST', `/audiobookshelf/play/${guildId}/${id}`, episodeId ? { episodeId } : {}),
   audiobookshelfQueue: (guildId, id, episodeId) => request('POST', `/audiobookshelf/queue/${guildId}/${id}`, episodeId ? { episodeId } : {}),
   audiobookshelfItem: (id) => request('GET', `/audiobookshelf/items/${id}`),
+  audiobookshelfContinue: () => request('GET', '/audiobookshelf/continue-listening'),
+  audiobookshelfProgress: (id, data) => request('PATCH', `/audiobookshelf/progress/${id}`, data),
 };

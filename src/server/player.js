@@ -14,7 +14,7 @@ const ffmpegPath = require('ffmpeg-static');
 function createUrlStream(url, seekSeconds) {
   const args = [];
   if (seekSeconds > 0) args.push('-ss', String(seekSeconds));
-  args.push('-i', url, '-analyzeduration', '0', '-loglevel', 'error',
+    args.push('-i', url, '-analyzeduration', '0', '-loglevel', 'error',
     '-f', 's16le', '-ar', '48000', '-ac', '2', '-map', 'a', 'pipe:1');
   const proc = spawn(ffmpegPath, args, { windowsHide: true });
   let stderr = '';
@@ -88,6 +88,7 @@ export class GuildPlayer {
     this.currentAbsEpisodeId = null;
     this.currentAbsOffset = 0;
     this.currentAbsDuration = 0;
+    this.currentNavidromeSongId = null;
     this.playbackStartedAt = 0;
     this.totalPausedMs = 0;
     this.pauseStartedAt = 0;
@@ -102,7 +103,7 @@ export class GuildPlayer {
 
     this.audioPlayer.on('stateChange', (oldState, newState) => {
       if (newState.status === AudioPlayerStatus.Idle && oldState.status !== AudioPlayerStatus.Idle) {
-        const ended = this._getAudiobookshelfPlayback();
+        const ended = this._getPlaybackMetadata();
         const hasNext = this.queue.length > 0 && (this.loop === 'queue' || this.currentIndex + 1 < this.queue.length);
         this.currentTrack = null;
         this.currentResource = null;
@@ -115,12 +116,13 @@ export class GuildPlayer {
         this.currentAbsEpisodeId = null;
         this.currentAbsOffset = 0;
         this.currentAbsDuration = 0;
+        this.currentNavidromeSongId = null;
         this.playbackStartedAt = 0;
         this.seekOffset = 0;
         this.totalPausedMs = 0;
         this._emitStatus();
         const startedNext = this._playNext();
-        if (ended?.sessionId) this.onPlaybackEvent?.(startedNext || hasNext ? 'track-ended' : 'session-ended', ended);
+        if (ended) this.onPlaybackEvent?.(startedNext || hasNext ? 'track-ended' : 'session-ended', ended);
       }
       if (newState.status === AudioPlayerStatus.Playing) {
         this.isPlaying = true;
@@ -225,6 +227,7 @@ export class GuildPlayer {
       this.currentAbsEpisodeId = null;
       this.currentAbsOffset = 0;
       this.currentAbsDuration = 0;
+      this.currentNavidromeSongId = null;
       this.currentIndex = this.queue.indexOf(resolved);
       this.seekOffset = 0;
       this.totalPausedMs = 0;
@@ -250,7 +253,9 @@ export class GuildPlayer {
     this.audioPlayer.stop();
 
     try {
-      const proc = createUrlStream(url, 0);
+      const initialSeek = Math.max(0, Number(meta.absStartOffset) || 0);
+      meta.absStartOffset = 0;
+      const proc = createUrlStream(url, initialSeek);
       this.ffmpegProcess = proc;
       const resource = createAudioResource(proc.stdout, {
         inputType: StreamType.Raw,
@@ -269,13 +274,15 @@ export class GuildPlayer {
       this.currentAbsEpisodeId = meta.absEpisodeId || null;
       this.currentAbsOffset = Number(meta.absOffset) || 0;
       this.currentAbsDuration = Number(meta.absDuration) || Number(duration) || 0;
-      this.seekOffset = 0;
+      this.currentNavidromeSongId = meta.navidromeSongId || null;
+      this.seekOffset = initialSeek;
       this.totalPausedMs = 0;
       this.playbackStartedAt = 0;
 
       this.audioPlayer.play(resource);
       this.isPlaying = true;
       this.isPaused = false;
+      this.onPlaybackEvent?.('track-start', this._getPlaybackMetadata());
       return true;
     } catch (err) {
       console.error('[Player] URL stream error:', err.message);
@@ -306,15 +313,34 @@ export class GuildPlayer {
 
   seekTo(seconds) {
     if (!this.currentFilePath || !this.connection) return false;
-    if (this.currentDuration) seconds = Math.max(0, Math.min(seconds, this.currentDuration));
+    const currentItem = this.currentIndex >= 0 ? this.queue[this.currentIndex] : null;
+    if (this.currentAbsSessionId) {
+      const total = this.currentAbsDuration || this.currentDuration;
+      seconds = total ? Math.max(0, Math.min(seconds, total)) : Math.max(0, seconds);
+      const targetIndex = this.queue.findIndex((track) => {
+        const start = Number(track.absOffset) || 0;
+        const end = start + (Number(track.duration) || 0);
+        return seconds >= start && (seconds < end || track === this.queue[this.queue.length - 1]);
+      });
+      if (targetIndex >= 0 && targetIndex !== this.currentIndex) {
+        this.queue[targetIndex].absStartOffset = Math.max(0, seconds - (Number(this.queue[targetIndex].absOffset) || 0));
+        this.currentIndex = targetIndex - 1;
+        stopFfmpegProcess(this.ffmpegProcess);
+        this.ffmpegProcess = null;
+        this.audioPlayer.stop();
+        return this._playNext();
+      }
+      seconds = Math.max(0, seconds - (Number(currentItem?.absOffset) || 0));
+    } else if (this.currentDuration) {
+      seconds = Math.max(0, Math.min(seconds, this.currentDuration));
+    }
 
     stopFfmpegProcess(this.ffmpegProcess);
     this.ffmpegProcess = null;
     this.audioPlayer.stop();
 
     try {
-      const currentItem = this.currentIndex >= 0 ? this.queue[this.currentIndex] : null;
-      const isUrl = currentItem?.type === 'url';
+       const isUrl = currentItem?.type === 'url';
       const proc = isUrl
         ? createUrlStream(this.currentFilePath, seconds)
         : createSeekableStream(this.currentFilePath, seconds);
@@ -341,7 +367,7 @@ export class GuildPlayer {
 
   pause() {
     if (this.audioPlayer.state.status === AudioPlayerStatus.Playing) {
-      this.onPlaybackEvent?.('pause', this._getAudiobookshelfPlayback());
+      this.onPlaybackEvent?.('pause', this._getPlaybackMetadata());
       this.audioPlayer.pause();
       return true;
     }
@@ -361,7 +387,7 @@ export class GuildPlayer {
   }
 
   stop() {
-    this.onPlaybackEvent?.('stop', this._getAudiobookshelfPlayback());
+    this.onPlaybackEvent?.('stop', this._getPlaybackMetadata());
     this.cancelSleepTimer();
     stopFfmpegProcess(this.ffmpegProcess);
     this.ffmpegProcess = null;
@@ -379,6 +405,7 @@ export class GuildPlayer {
     this.currentAbsEpisodeId = null;
     this.currentAbsOffset = 0;
     this.currentAbsDuration = 0;
+    this.currentNavidromeSongId = null;
     this.playbackStartedAt = 0;
     this.seekOffset = 0;
     this.totalPausedMs = 0;
@@ -466,6 +493,7 @@ export class GuildPlayer {
 
   getStatus() {
     const currentTime = this.getCurrentTime();
+    const totalDuration = this.currentAbsDuration || this.currentDuration;
     return {
       guildId: this.guildId,
       isPlaying: this.isPlaying,
@@ -490,6 +518,10 @@ export class GuildPlayer {
       audiobookshelfEpisodeId: this.currentAbsEpisodeId,
       audiobookshelfOffset: this.currentAbsOffset,
       audiobookshelfDuration: this.currentAbsDuration,
+      navidromeSongId: this.currentNavidromeSongId,
+      totalDuration: Math.round(totalDuration),
+      currentProgressPercent: totalDuration > 0 ? Math.min(100, Math.round((currentTime / totalDuration) * 100)) : 0,
+      audiobookshelfChapter: this.currentIndex >= 0 ? (this.queue[this.currentIndex]?.absChapterTitle || null) : null,
       sleepTimerSeconds: this.sleepTimerEndsAt ? Math.max(0, Math.ceil((this.sleepTimerEndsAt - Date.now()) / 1000)) : 0,
     };
   }
@@ -501,6 +533,19 @@ export class GuildPlayer {
       sessionId: this.currentAbsSessionId,
       itemId: this.currentAbsItemId,
       episodeId: this.currentAbsEpisodeId,
+      currentTime: this.currentAbsOffset + this.getCurrentTime(),
+      duration: this.currentAbsDuration || this.currentDuration,
+    };
+  }
+
+  _getPlaybackMetadata() {
+    const abs = this._getAudiobookshelfPlayback();
+    const navidromeSongId = this.currentNavidromeSongId;
+    if (!abs && !navidromeSongId) return null;
+    return {
+      ...(abs || {}),
+      guildId: this.guildId,
+      navidromeSongId,
       currentTime: this.currentAbsOffset + this.getCurrentTime(),
       duration: this.currentAbsDuration || this.currentDuration,
     };

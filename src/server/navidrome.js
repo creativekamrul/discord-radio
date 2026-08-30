@@ -1,5 +1,7 @@
 import crypto from 'crypto';
 
+const CLIENT_NAME = 'MonoSpace Radio';
+
 function generateToken(password) {
   const salt = crypto.randomBytes(8).toString('hex');
   const token = crypto.createHash('md5').update(password + salt).digest('hex');
@@ -8,11 +10,12 @@ function generateToken(password) {
 
 export class NavidromeClient {
   constructor(url, username, password, internalUrl) {
-    this.baseUrl = url.replace(/\/+$/, '');
-    this.streamBaseUrl = (internalUrl || url).replace(/\/+$/, '');
+    this.baseUrl = (url || '').replace(/\/+$/, '');
+    this.streamBaseUrl = (internalUrl || url || '').replace(/\/+$/, '');
     this.username = username;
     this.password = password;
     this.available = !!(url && username && password);
+    this.debug = process.env.NAVIDROME_DEBUG === 'true';
     console.log(`[Navidrome] Initialized — url: ${this.baseUrl}, streamUrl: ${this.streamBaseUrl}, user: ${this.username}, available: ${this.available}`);
   }
 
@@ -24,16 +27,15 @@ export class NavidromeClient {
       t: token,
       s: salt,
       v: '1.16.1',
-      c: 'radio-discord-bot',
+      c: CLIENT_NAME,
       f: 'json',
       ...params,
     });
     const url = `${this.baseUrl}/rest/${endpoint}?${query}`;
-    console.log(`[Navidrome] Requesting: ${url}`);
+    const startedAt = Date.now();
     const res = await fetch(url);
-    console.log(`[Navidrome] Response status: ${res.status}`);
     const data = await res.json();
-    console.log(`[Navidrome] Response body:`, JSON.stringify(data));
+    if (this.debug) console.log(`[Navidrome] ${endpoint} -> ${res.status} (${Date.now() - startedAt}ms)`);
     const subsonicResponse = data['subsonic-response'];
     if (!subsonicResponse || subsonicResponse.status !== 'ok') {
       throw new Error(subsonicResponse?.error?.message || 'Subsonic API error');
@@ -49,10 +51,18 @@ export class NavidromeClient {
       t: token,
       s: salt,
       v: '1.16.1',
-      c: 'radio-discord-bot',
+      c: CLIENT_NAME,
       id: songId,
     });
     return `${this.streamBaseUrl}/rest/stream?${params}`;
+  }
+
+  async scrobble(songId, submission = true, position = null) {
+    if (!songId) return false;
+    const params = { id: songId, submission: submission ? 'true' : 'false' };
+    if (Number.isFinite(Number(position)) && Number(position) > 0) params.time = String(Math.floor(Number(position) * 1000));
+    await this._request('scrobble', params);
+    return true;
   }
 
   getCoverArtUrl(coverArtId) {
@@ -63,7 +73,7 @@ export class NavidromeClient {
       t: token,
       s: salt,
       v: '1.16.1',
-      c: 'radio-discord-bot',
+      c: CLIENT_NAME,
       id: coverArtId,
       size: '300',
     });

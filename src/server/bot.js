@@ -8,6 +8,7 @@ import {
   StringSelectMenuBuilder,
   ButtonBuilder,
   ButtonStyle,
+  Events,
 } from 'discord.js';
 import {
   joinVoiceChannel,
@@ -34,6 +35,7 @@ export class RadioBot {
     this.token = token;
     this.navidrome = navidrome;
     this.audiobookshelf = audiobookshelf;
+    this.voiceDebug = process.env.DISCORD_VOICE_DEBUG === 'true';
     this.client = new Client({
       intents: [
         GatewayIntentBits.Guilds,
@@ -41,6 +43,7 @@ export class RadioBot {
       ],
     });
     this.absSyncState = new Map();
+    this.navidromeSyncState = new Map();
     this.playerManager = new PlayerManager(
       (status) => this._updatePresence(status),
       (event, playback) => this._handlePlaybackEvent(event, playback),
@@ -49,13 +52,14 @@ export class RadioBot {
       for (const player of this.playerManager.players.values()) {
         const status = player.getStatus();
         if (status.isPlaying || status.isPaused) this._syncAudiobookshelf(status);
+        if (status.isPlaying || status.isPaused) this._syncNavidrome(status);
       }
     }, 15000);
     this.absSyncTimer.unref?.();
     this.playerPanels = new Map();
     this.ready = false;
 
-    this.client.once('ready', () => {
+    this.client.once(Events.ClientReady, () => {
       console.log(`[Bot] Logged in as ${this.client.user.tag}`);
       this.ready = true;
       this._registerCommands();
@@ -95,7 +99,7 @@ export class RadioBot {
     await this.client.login(this.token);
     return new Promise((resolve) => {
       if (this.ready) return resolve();
-      this.client.once('ready', () => resolve());
+      this.client.once(Events.ClientReady, () => resolve());
     });
   }
 
@@ -142,14 +146,14 @@ export class RadioBot {
       selfMute: false,
     });
 
-    connection.on('debug', (msg) => console.log(`[Bot:Debug] ${msg}`));
+    if (this.voiceDebug) connection.on('debug', (msg) => console.log(`[Bot:Debug] ${msg}`));
 
     const player = this.playerManager.get(guildId);
     player.setConnection(connection);
 
     connection.on('stateChange', (oldState, newState) => {
-      console.log(`[Bot] Connection: ${oldState.status} -> ${newState.status}`);
-      if (newState.status === VoiceConnectionStatus.Connecting && newState.networking) {
+      if (this.voiceDebug) console.log(`[Bot] Connection: ${oldState.status} -> ${newState.status}`);
+      if (this.voiceDebug && newState.status === VoiceConnectionStatus.Connecting && newState.networking) {
         const net = newState.networking;
         net.on('stateChange', (o, n) => {
           console.log(`[Bot:Net] ${o.code} -> ${n.code}`);
@@ -164,7 +168,7 @@ export class RadioBot {
         });
       }
       if (newState.status === VoiceConnectionStatus.Signalling && oldState.status === VoiceConnectionStatus.Connecting) {
-        console.log('[Bot] Voice connection failed, retrying...');
+        console.warn('[Bot] Voice connection failed, retrying...');
       }
     });
 
@@ -216,15 +220,57 @@ export class RadioBot {
   }
 
   async _handlePlaybackEvent(event, playback) {
-    if (!playback?.sessionId) return;
-    if (event === 'stop' || event === 'session-ended') {
+    if (playback?.sessionId && (event === 'stop' || event === 'session-ended')) {
       const finalPlayback = event === 'session-ended' && playback.duration
         ? { ...playback, currentTime: playback.duration }
         : playback;
       await this._syncAudiobookshelf(finalPlayback, true, true);
-      return;
+    } else if (playback?.sessionId) {
+      await this._syncAudiobookshelf(playback, true, false);
     }
-    await this._syncAudiobookshelf(playback, true, false);
+    if (playback?.navidromeSongId) {
+      if (event === 'track-start') await this._reportNavidromeNowPlaying(playback);
+      if (event === 'stop' || event === 'track-ended' || event === 'session-ended') {
+        await this._reportNavidromeScrobble(playback, event === 'session-ended' || event === 'track-ended');
+      }
+    }
+  }
+
+  async _reportNavidromeNowPlaying(playback) {
+    if (!this.navidrome.available || !playback?.navidromeSongId) return;
+    const key = playback.guildId || playback.navidromeSongId;
+    this.navidromeSyncState.set(key, { songId: playback.navidromeSongId, startedAt: Date.now(), scrobbled: false });
+    try {
+      await this.navidrome.scrobble(playback.navidromeSongId, false, playback.currentTime);
+    } catch (err) {
+      console.warn(`[Navidrome] Now-playing report failed: ${err.message}`);
+    }
+  }
+
+  async _reportNavidromeScrobble(playback, completed = false) {
+    if (!this.navidrome.available || !playback?.navidromeSongId) return;
+    const key = playback.guildId || playback.navidromeSongId;
+    const state = this.navidromeSyncState.get(key);
+    if (state?.songId !== playback.navidromeSongId || state?.scrobbled) return;
+    const duration = Number(playback.duration) || 0;
+    const position = Math.max(0, Number(playback.currentTime) || 0);
+    const threshold = duration > 0 ? Math.min(duration * 0.5, 240) : 240;
+    if (!completed && position < threshold) return;
+    try {
+      await this.navidrome.scrobble(playback.navidromeSongId, true, position);
+      this.navidromeSyncState.set(key, { ...state, scrobbled: true, position });
+      console.log(`[Navidrome] Scrobbled ${playback.navidromeSongId} at ${Math.floor(position)}s`);
+    } catch (err) {
+      console.warn(`[Navidrome] Scrobble failed: ${err.message}`);
+    }
+  }
+
+  async _syncNavidrome(status) {
+    if (!this.navidrome.available || !status?.navidromeSongId) return;
+    const key = status.guildId || status.navidromeSongId;
+    const state = this.navidromeSyncState.get(key);
+    if (!state || state.songId !== status.navidromeSongId || state.scrobbled) return;
+    await this._reportNavidromeScrobble({ ...status, currentTime: status.currentTime, duration: status.currentDuration, navidromeSongId: status.navidromeSongId });
   }
 
   async _syncAudiobookshelf(playback, force = false, close = false) {
@@ -266,15 +312,17 @@ export class RadioBot {
       .join('\n');
     const context = [status.source, status.collection].filter(Boolean).join(' · ');
     const elapsed = this._formatTime(status.currentTime);
-    const duration = this._formatTime(status.currentDuration);
-    const progress = status.currentDuration ? `${elapsed} / ${duration}` : 'Live / unknown length';
+    const duration = this._formatTime(status.totalDuration || status.currentDuration);
+    const percent = status.currentProgressPercent || 0;
+    const progressBar = status.currentDuration ? `${'▰'.repeat(Math.min(10, Math.round(percent / 10)))}${'▱'.repeat(Math.max(0, 10 - Math.round(percent / 10)))}` : '—';
+    const progress = (status.totalDuration || status.currentDuration) ? `${progressBar} ${elapsed} / ${duration} (${percent}%)` : 'Live / unknown length';
 
     const embed = new EmbedBuilder()
       .setTitle('🎛️ Radio Bot Player')
       .setColor(status.isPaused ? 0xf0b84b : 0x7c4dff)
       .setDescription(hasTrack ? `**${status.currentTrack}**` : '*Nothing is playing right now.*')
       .addFields(
-        { name: 'Source', value: context || '—', inline: true },
+        { name: 'Source / collection', value: context || '—', inline: true },
         { name: 'Progress', value: progress, inline: true },
         { name: 'Queue', value: queue || 'No upcoming tracks', inline: false },
         { name: 'Playback', value: `${status.loop} loop · ${status.shuffled ? '🔀 shuffle on' : 'shuffle off'} · ${Math.round(status.volume * 100)}% volume${status.sleepTimerSeconds ? ` · 🌙 ${this._formatTime(status.sleepTimerSeconds)}` : ''}`, inline: false },
@@ -307,6 +355,12 @@ export class RadioBot {
         button('player:clear', '🧹 Clear queue', ButtonStyle.Danger),
       ),
     ];
+
+    if (status.audiobookshelfItemId) rows.push(new ActionRowBuilder().addComponents(
+      button('player:chapter-prev', '⏮ Previous chapter', ButtonStyle.Secondary, !hasTrack),
+      button('player:chapter-next', 'Next chapter ⏭', ButtonStyle.Secondary, !hasTrack),
+      button('player:mark-finished', '✅ Mark book finished', ButtonStyle.Success),
+    ));
 
     return { embeds: [embed], components: rows };
   }
@@ -546,6 +600,10 @@ export class RadioBot {
       player.previous();
     } else if (action === 'next') {
       player.skip();
+    } else if (action === 'chapter-prev') {
+      player.previous();
+    } else if (action === 'chapter-next') {
+      player.skip();
     } else if (action === 'stop') {
       player.stop();
     } else if (action === 'refresh') {
@@ -563,6 +621,13 @@ export class RadioBot {
       player.setLoop(next);
     } else if (action === 'clear') {
       player.clearQueue();
+    } else if (action === 'mark-finished') {
+      const status = player.getStatus();
+      await this.audiobookshelf.updateProgress(status.audiobookshelfItemId, status.audiobookshelfEpisodeId, {
+        currentTime: status.audiobookshelfDuration || status.currentDuration,
+        duration: status.audiobookshelfDuration || status.currentDuration,
+        isFinished: true,
+      });
     } else if (action.startsWith('sleep:')) {
       const value = action.slice('sleep:'.length);
       if (value === 'off') player.cancelSleepTimer();
@@ -670,7 +735,7 @@ export class RadioBot {
       const streamUrl = this.navidrome.getStreamUrl(song.id);
       if (streamUrl) {
         const title = `${song.artist} - ${song.title}`;
-        player.addToQueueUrl(streamUrl, title, song.duration, { source: 'Navidrome', collection: pl.name });
+      player.addToQueueUrl(streamUrl, title, song.duration, { source: 'Navidrome', collection: pl.name, navidromeSongId: song.id });
       }
     }
     player.play();
@@ -682,12 +747,12 @@ export class RadioBot {
     if (!streamUrl) return null;
     const title = `${song.artist} - ${song.title}`;
     const player = this.playerManager.get(guildId);
-    player.playNowUrl(streamUrl, title, song.duration, { source: 'Navidrome' });
+    player.playNowUrl(streamUrl, title, song.duration, { source: 'Navidrome', navidromeSongId: song.id });
     return title;
   }
 
   async _playAudiobook(guildId, itemId, episodeId) {
-    const item = await this.audiobookshelf.getItem(itemId);
+    const item = await this.audiobookshelf.getItem(itemId, episodeId);
     const session = await this.audiobookshelf.startPlayback(itemId, episodeId);
     const episode = episodeId ? (item.media?.episodes || []).find((entry) => entry.id === episodeId) : null;
     const title = episode?.title || episode?.displayTitle || item.media?.metadata?.title || 'Audiobook';
@@ -697,8 +762,12 @@ export class RadioBot {
     const sessionId = session.id || session.sessionId;
     const tracks = session.audioTracks || [];
     const totalDuration = Number(session.duration || item.media?.duration || tracks.reduce((sum, track) => sum + (Number(track.duration) || 0), 0));
+    const resume = Math.max(0, Number(item.userMediaProgress?.currentTime) || 0);
     let offset = 0;
-    for (const track of tracks) {
+    for (let index = 0; index < tracks.length; index += 1) {
+      const track = tracks[index];
+      const trackDuration = Number(track.duration) || 0;
+      if (offset + trackDuration <= resume && index < tracks.length - 1) { offset += trackDuration; continue; }
       player.addToQueueUrl(track.contentUrl, `${title}${track.title ? ` — ${track.title}` : ''}`, track.duration, {
         source: 'Audiobookshelf',
         collection: title,
@@ -707,8 +776,10 @@ export class RadioBot {
         absEpisodeId: episodeId || null,
         absOffset: offset,
         absDuration: totalDuration,
+        absStartOffset: Math.max(0, resume - offset),
+        absChapterTitle: track.title || null,
       });
-      offset += Number(track.duration) || 0;
+      offset += trackDuration;
     }
     player.play();
     return title;

@@ -4,8 +4,8 @@
   "description": "Discord radio bot with web dashboard for controlling audio playback",
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"node server.js\" \"vite\"",
-    "dev:bot": "node server.js",
+    "dev": "concurrently \"node --watch server.js\" \"vite\"",
+    "dev:bot": "node --watch server.js",
     "dev:client": "vite",
     "build": "vite build",
     "start": "node server.js",

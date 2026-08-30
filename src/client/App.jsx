@@ -11,9 +11,11 @@ export default function App() {
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState('');
   const [guilds, setGuilds] = useState([]);
+  const [discordClientId, setDiscordClientId] = useState('');
   const [selectedGuild, setSelectedGuild] = useState(null);
   const [connectedChannel, setConnectedChannel] = useState(null);
   const [status, setStatus] = useState(null);
+  const [channelDrawerOpen, setChannelDrawerOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const pollRef = useRef(null);
   const statusRef = useRef(null);
@@ -44,8 +46,9 @@ export default function App() {
 
   const loadData = useCallback(async () => {
     try {
-      const g = await api.getGuilds();
+      const [g, config] = await Promise.all([api.getGuilds(), api.getConfig()]);
       setGuilds(g);
+      setDiscordClientId(config.discordClientId || '');
       if (g.length > 0 && !selectedGuild) setSelectedGuild(g[0].id);
       setLoading(false);
     } catch { setLoading(false); }
@@ -96,25 +99,41 @@ export default function App() {
       <header className="app-header">
         <h1>📻 Radio Bot</h1>
         <div className="header-right">
-          <select value={selectedGuild || ''} onChange={(e) => setSelectedGuild(e.target.value)}>
-            {guilds.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-          </select>
+          <button className="channel-drawer-trigger secondary" onClick={() => setChannelDrawerOpen(true)}>
+            ⚙️ Server &amp; voice
+          </button>
           <button className="secondary sm" onClick={handleLogout}>Logout</button>
         </div>
       </header>
+
+      <div className={`offcanvas-overlay ${channelDrawerOpen ? 'open' : ''}`} onClick={() => setChannelDrawerOpen(false)} />
+      <aside className={`offcanvas channel-drawer ${channelDrawerOpen ? 'open' : ''}`} aria-hidden={!channelDrawerOpen}>
+        <div className="offcanvas-header">
+          <div><h2>Server &amp; voice channel</h2><span className="offcanvas-subtitle">Choose the server and where the bot should play</span></div>
+          <button className="secondary sm" onClick={() => setChannelDrawerOpen(false)}>Close</button>
+        </div>
+        <div className="offcanvas-content">
+          <div className="drawer-field">
+            <label htmlFor="server-select">Discord server</label>
+            <select id="server-select" value={selectedGuild || ''} onChange={(e) => setSelectedGuild(e.target.value)}>
+              {guilds.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+            </select>
+          </div>
+          <ChannelBar guildId={selectedGuild} connectedChannel={connectedChannel} onUpdate={pollStatus} />
+        </div>
+      </aside>
 
       {guilds.length === 0 ? (
         <div className="card setup-card">
           <h2>Setup Required</h2>
           <p>The bot isn't in any Discord server yet.</p>
-          <a href="https://discord.com/oauth2/authorize?client_id=1498074269090058312&scope=bot&permissions=3146752"
-             target="_blank" rel="noreferrer" className="invite-link">Invite Bot</a>
+          {discordClientId ? <a href={`https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(discordClientId)}&scope=bot%20applications.commands&permissions=36719616`}
+             target="_blank" rel="noreferrer" className="invite-link">Invite Bot</a> : <p className="auth-error">Set DISCORD_CLIENT_ID to generate an invite link.</p>}
           <button className="secondary" onClick={loadData} style={{ marginTop: '1rem' }}>Retry</button>
         </div>
       ) : selectedGuild && (
         <div className="app-body">
           <div className="main-content">
-            <ChannelBar guildId={selectedGuild} connectedChannel={connectedChannel} onUpdate={pollStatus} />
             <div className="main-grid">
               <PlayerSection guildId={selectedGuild} status={status} onUpdate={pollStatus} />
               <QueuePanel guildId={selectedGuild} status={status} onUpdate={pollStatus} />
