@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../api';
 
 function fmt(s) {
@@ -11,6 +11,34 @@ function fmt(s) {
 export default function PlayerSection({ guildId, status, onUpdate }) {
   const [finishState, setFinishState] = useState('idle');
   const [finishError, setFinishError] = useState('');
+  const [navidromeTrack, setNavidromeTrack] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl = '';
+    const songId = status?.navidromeSongId;
+    setNavidromeTrack(null);
+    if (!songId) return () => { active = false; };
+
+    api.navidromeSong(songId).then(async (song) => {
+      let coverUrl = '';
+      if (song.coverArt) {
+        try {
+          const blob = await api.navidromeCoverBlob(song.coverArt);
+          coverUrl = URL.createObjectURL(blob);
+          objectUrl = coverUrl;
+        } catch {}
+      }
+      if (active) setNavidromeTrack({ ...song, coverUrl });
+      else if (coverUrl) URL.revokeObjectURL(coverUrl);
+    }).catch(() => {});
+
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [status?.navidromeSongId]);
+
   if (!status) return <div className="card player-section player-card"><h2>Player</h2><p className="empty-state">Not connected</p></div>;
 
   const duration = status.totalDuration || status.currentDuration;
@@ -49,9 +77,12 @@ export default function PlayerSection({ guildId, status, onUpdate }) {
         <div className="disc-label"><span>♪</span></div>
       </div>
       <div className="now-playing-row">
-        <div className="np-icon">{status.isPlaying ? '🎵' : '⏸️'}</div>
+        {navidromeTrack?.coverUrl
+          ? <img className="np-cover" src={navidromeTrack.coverUrl} alt="" />
+          : <div className="np-icon">{status.isPlaying ? '🎵' : '⏸️'}</div>}
         <div className="np-info">
-          <div className="np-title">{status.currentTrack || 'Nothing playing'}</div>
+          <div className="np-title">{navidromeTrack?.title || status.currentTrack || 'Nothing playing'}</div>
+          {navidromeTrack?.artist && <div className="np-artist">{navidromeTrack.artist}{navidromeTrack.album ? <span> · {navidromeTrack.album}</span> : null}</div>}
           <div className="np-subtitle">
             {status.isPaused ? 'Paused' : status.isPlaying ? `Track ${status.currentIndex + 1} of ${status.queueLength}` : 'Stopped'}
           </div>

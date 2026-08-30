@@ -17,6 +17,16 @@ async function request(method, url, body) {
   return data;
 }
 
+async function requestBlob(url) {
+  const res = await fetch(`${BASE}${url}`, { headers: getHeaders() });
+  if (res.status === 401) throw new Error('UNAUTHORIZED');
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Image request failed (${res.status})`);
+  }
+  return res.blob();
+}
+
 export const api = {
   getConfig: () => request('GET', '/config'),
   getGuilds: () => request('GET', '/guilds'),
@@ -65,6 +75,8 @@ export const api = {
   navidromeStatus: () => request('GET', '/navidrome/status'),
   navidromeArtists: () => request('GET', '/navidrome/artists'),
   navidromeArtist: (id) => request('GET', `/navidrome/artists/${id}`),
+  navidromeSong: (id) => request('GET', `/navidrome/songs/${id}`),
+  navidromeAlbums: (type = 'alphabeticalByName') => request('GET', `/navidrome/albums?type=${encodeURIComponent(type)}`),
   navidromeAlbum: (id) => request('GET', `/navidrome/albums/${id}`),
   navidromeSearch: (query) => request('GET', `/navidrome/search?query=${encodeURIComponent(query)}`),
   navidromePlaySong: (guildId, songId, collection) => request('POST', `/navidrome/play/${guildId}/${songId}`, collection ? { collection } : {}),
@@ -72,6 +84,7 @@ export const api = {
   navidromePlayAlbum: (guildId, albumId) => request('POST', `/navidrome/play-album/${guildId}/${albumId}`),
   navidromeQueueAlbum: (guildId, albumId) => request('POST', `/navidrome/queue-album/${guildId}/${albumId}`),
   navidromeCoverUrl: (coverArtId) => coverArtId ? `${BASE}/navidrome/cover/${coverArtId}` : null,
+  navidromeCoverBlob: (coverArtId) => requestBlob(`/navidrome/cover/${encodeURIComponent(coverArtId)}`),
   navidromePlaylists: () => request('GET', '/navidrome/playlists'),
   navidromePlaylist: (id) => request('GET', `/navidrome/playlists/${id}`),
   navidromePlayPlaylist: (guildId, id) => request('POST', `/navidrome/play-playlist/${guildId}/${id}`),

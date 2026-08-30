@@ -120,6 +120,30 @@ export class NavidromeClient {
     };
   }
 
+  async getAlbumList(type = 'alphabeticalByName', size = 500) {
+    const albums = [];
+    const seen = new Set();
+    for (let offset = 0; ; offset += size) {
+      const res = await this._request('getAlbumList2', { type, size: String(size), offset: String(offset) });
+      const page = res.albumList2?.album || [];
+      const unseen = page.filter((album) => !seen.has(album.id));
+      unseen.forEach((album) => seen.add(album.id));
+      albums.push(...unseen);
+      if (page.length < size || unseen.length === 0) break;
+    }
+    return albums.map((album) => ({
+      id: album.id,
+      name: album.name,
+      artist: album.artist,
+      artistId: album.artistId,
+      year: album.year,
+      songCount: album.songCount,
+      duration: album.duration,
+      coverArt: album.coverArt,
+      played: album.played,
+    }));
+  }
+
   async getAlbum(albumId) {
     const res = await this._request('getAlbum', { id: albumId });
     const album = res.album;
@@ -206,6 +230,7 @@ export class NavidromeClient {
       name: pl.name,
       songCount: pl.songCount,
       duration: pl.duration,
+      coverArt: pl.coverArt,
       songs: (pl.entry || []).map((s) => ({
         id: s.id,
         title: s.title,

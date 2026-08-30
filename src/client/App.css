@@ -481,34 +481,47 @@ select option { background: var(--bg-card-solid); color: var(--text-primary); }
 .now-playing-row {
   display: flex;
   align-items: center;
-  gap: 1rem;
-  margin-bottom: 1rem;
+  gap: 1.2rem;
+  margin-bottom: 1.15rem;
 }
 
 .np-icon {
-  width: 56px; height: 56px;
+  width: 116px; height: 116px;
   border-radius: var(--radius-sm);
   background: var(--accent-dim);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.5rem;
+  font-size: 2rem;
   flex-shrink: 0;
 }
 
-.np-info { flex: 1; min-width: 0; }
+.np-cover {
+  width: 116px;
+  height: 116px;
+  border: 1px solid #4a5574;
+  border-radius: 13px;
+  object-fit: cover;
+  flex-shrink: 0;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.32);
+}
+
+.np-info { flex: 1; min-width: 0; align-self: center; }
 .np-info { padding-right: 8.5rem; }
 
 .np-title {
-  font-size: 1rem;
-  font-weight: 600;
+  font-size: 1.22rem;
+  font-weight: 650;
+  line-height: 1.25;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.np-subtitle { font-size: 0.8rem; color: var(--text-secondary); margin-top: 2px; }
-.np-context { font-size: 0.72rem; color: var(--accent); margin-top: 0.35rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-artist { margin-top: 0.28rem; color: #c8cce0; font-size: 0.9rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-artist span { color: #8f96b3; font-weight: 400; }
+.np-subtitle { font-size: 0.82rem; color: var(--text-secondary); margin-top: 0.3rem; }
+.np-context { font-size: 0.78rem; color: var(--accent); margin-top: 0.45rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .source-pill { display: inline-flex; padding: 0.12rem 0.4rem; margin-right: 0.25rem; border: 1px solid #5b4b93; border-radius: 999px; color: #d2c4ff; background: #292044; }
 .progress-percent { display: block; margin-top: 0.15rem; color: var(--accent); font-size: 0.65rem; }
 
@@ -669,6 +682,7 @@ input[type="range"]::-webkit-slider-thumb {
 /* Queue / File Browser / Playlists */
 .section-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 0;
   margin-bottom: 0.75rem;
   border-bottom: 1px solid var(--border);
@@ -1152,5 +1166,8 @@ input[type="range"]::-webkit-slider-thumb {
   .player-disc::after { inset: 9px; }
   .disc-grooves { inset: 18px; }
   .np-info { padding-right: 5rem; }
+  .np-icon, .np-cover { width: 82px; height: 82px; }
+  .np-title { font-size: 1.02rem; }
+  .np-artist { font-size: 0.8rem; }
   .controls-row, .toggles-row { flex-wrap: wrap; }
 }

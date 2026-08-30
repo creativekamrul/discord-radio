@@ -335,6 +335,23 @@ export function createAPIRoutes(bot, audioDir, navidrome, audiobookshelf) {
     }
   });
 
+  router.get('/navidrome/songs/:id', async (req, res) => {
+    try {
+      res.json(await navidrome.getSong(req.params.id));
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  router.get('/navidrome/albums', async (req, res) => {
+    try {
+      const type = ['recent', 'frequent'].includes(req.query.type) ? req.query.type : 'alphabeticalByName';
+      res.json(await navidrome.getAlbumList(type));
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
   router.get('/navidrome/albums/:id', async (req, res) => {
     try {
       const album = await navidrome.getAlbum(req.params.id);
